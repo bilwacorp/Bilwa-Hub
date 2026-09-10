@@ -51,6 +51,30 @@ npm install
 npm run dev
 ```
 
+## Deploying (Dokploy)
+
+The whole hub is one `docker-compose.yml` — `postgres` + `backend` +
+`frontend` (nginx serving the SPA and proxying `/api` to `backend` on the
+compose network, so everything is one origin and the auth cookie works).
+
+1. In Dokploy, **Create Service → Compose**, point it at this repo
+   (`main` branch), compose file `docker-compose.yml`.
+2. **Environment tab** — set:
+   - `POSTGRES_PASSWORD` — any strong random string
+   - `SECRET_KEY` — random, 32+ chars
+   - `HUB_ENCRYPTION_KEY` — `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+   - `HUB_PUBLIC_URL` — the public URL you'll give this hub, e.g. `https://hub.bilwacorp.example`
+3. **Domains tab** — add your domain, routed to service **`frontend`**, port **`80`**. Leave `backend` and `postgres` with no domain.
+4. Deploy. `backend`'s container runs `alembic upgrade head` on every start,
+   so the schema + seeded admin are created automatically.
+5. Log in with `admin` / `ChangeMe@2026` and **change the password
+   immediately** (see below).
+
+Postgres runs in the stack with a named volume (`hub_pgdata`). If you'd
+rather use a Dokploy-managed database for automated backups, delete the
+`postgres` service from the compose file and point `DATABASE_URL` at the
+managed one.
+
 ## Connecting a new client deployment
 
 Full runbook (prerequisites, exact API calls, network requirements,

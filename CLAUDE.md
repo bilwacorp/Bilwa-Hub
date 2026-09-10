@@ -50,9 +50,22 @@ npm run dev      # dev server
 npm run build    # tsc + vite build
 ```
 
+### Whole stack (Docker)
+```bash
+docker compose up --build   # postgres + backend + frontend; needs POSTGRES_PASSWORD,
+                            # SECRET_KEY, HUB_ENCRYPTION_KEY (+ optional HUB_PUBLIC_URL)
+                            # in a .env next to docker-compose.yml
+```
+`docker-compose.yml` is also the Dokploy deploy unit — see README's
+"Deploying (Dokploy)". `frontend`'s nginx serves the SPA and proxies `/api`
+to `backend` on the compose network, so it's one origin (the auth cookie is
+`SameSite=Lax; Path=/api` — cross-origin would break it) and `backend`
+never needs its own public domain.
+
 URLs: Backend `http://localhost:8000/api/v1` (no `/docs` Swagger check done
 yet — verify it's enabled the same way PoultryOS-CBP's is if you need it).
-Frontend `http://localhost:5174`.
+Frontend `http://localhost:5174` (dev) / port `80` on the `frontend`
+container (compose).
 
 `HUB_ENCRYPTION_KEY` is **required**, not optional — it's the Fernet key
 the hub uses to decrypt a deployment's `action_key` when calling back in to

@@ -1,0 +1,68 @@
+# Single-stack deploy for the BilwaCorp Fleet Hub.
+#
+# Dokploy: create a "Compose" service pointed at this repo, set the env vars
+# below in the Environment tab, and attach the domain to the `frontend`
+# service on port 80. `postgres` and `backend` stay internal — only
+# `frontend` is public, and its nginx proxies /api to `backend`, so the SPA
+# and API share one origin (required for the HttpOnly SameSite=Lax auth
+# cookie). The backend needs no public domain.
+#
+# Local use: `docker compose up --build` after putting the same vars in a
+# .env file next to this one. (Or skip Docker entirely for dev — see README.)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the Environment tab}
+      POSTGRES_DB: bilwacorp_hub
+    volumes:
+      - hub_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hub -d bilwacorp_hub"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Points at the postgres service above — not a Dokploy-managed DB.
+      # Swap this for a managed connection string if you'd rather have
+      # Dokploy's automated backups; then delete the postgres service.
+      - DATABASE_URL=postgresql+asyncpg://hub:${POSTGRES_PASSWORD}@postgres:5432/bilwacorp_hub
+      - DB_SSL_MODE=disable
+      - SECRET_KEY=${SECRET_KEY:?set SECRET_KEY in the Environment tab}
+      # Fernet key — generate with:
+      #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      - HUB_ENCRYPTION_KEY=${HUB_ENCRYPTION_KEY:?generate a Fernet key - see README}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=1440
+      - APP_ENV=production
+      - LOG_LEVEL=INFO
+      # Same-origin proxying means CORS is barely exercised, but set this to
+      # the hub's public URL anyway for the odd direct call.
+      - BACKEND_CORS_ORIGINS=["${HUB_PUBLIC_URL:-http://localhost}"]
+      - FRONTEND_URL=${HUB_PUBLIC_URL:-http://localhost}
+    # The backend's Dockerfile CMD runs `alembic upgrade head` before
+    # uvicorn, so migrations apply on every deploy — don't override command.
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE_URL=/api/v1
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+volumes:
+  hub_pgdata:
