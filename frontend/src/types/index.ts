@@ -1,0 +1,86 @@
+export type DeploymentStatus = 'pending' | 'active' | 'suspended'
+export type SupportTicketStatus = 'open' | 'in_progress' | 'resolved' | 'closed'
+export type MaintenanceWindowStatus = 'planned' | 'in_progress' | 'completed' | 'cancelled'
+
+export interface PendingRequest {
+  id: string
+  request_type: string
+  requested_plan_name: string | null
+  message: string | null
+  requested_at: string
+}
+
+export interface UsageItem {
+  key: string
+  label: string
+  current: number
+  limit: number | null
+}
+
+export interface DeploymentSnapshot {
+  plan_name: string | null
+  subscription_status: string | null
+  expiry_date: string | null
+  trial_ends_at: string | null
+  auto_renew: boolean | null
+  usage: UsageItem[] | null
+  pending_requests: PendingRequest[] | null
+  app_version: string | null
+  received_at: string
+}
+
+export interface Deployment {
+  id: string
+  client_name: string
+  slug: string
+  base_url: string | null
+  status: DeploymentStatus
+  created_at: string
+  latest_snapshot: DeploymentSnapshot | null
+}
+
+export interface DeploymentListResponse {
+  total: number
+  items: Deployment[]
+}
+
+export interface DeploymentCreateOut {
+  id: string
+  client_name: string
+  slug: string
+  status: DeploymentStatus
+  registration_token: string
+}
+
+export interface SupportTicket {
+  id: string
+  deployment_id: string
+  subject: string
+  description: string
+  priority: string
+  status: SupportTicketStatus
+  submitted_by_name: string | null
+  submitted_by_email: string | null
+  created_at: string
+  resolved_at: string | null
+}
+
+export interface SupportTicketListResponse {
+  total: number
+  items: SupportTicket[]
+}
+
+export interface MaintenanceWindow {
+  id: string
+  deployment_id: string | null
+  scheduled_start: string
+  scheduled_end: string
+  description: string
+  status: MaintenanceWindowStatus
+  created_at: string
+}
+
+export interface MaintenanceWindowListResponse {
+  total: number
+  items: MaintenanceWindow[]
+}
