@@ -2,9 +2,12 @@
 core/casbin_watcher.py's shape (module-level task list, start/stop, a
 `while True: sleep; try/except` body).
 
-Phase 1: auto-transition window status off the clock
-(planned -> in_progress -> completed) and push each change to the affected
-deployment(s). Phase 2 adds reminder pushes here.
+Each tick: auto-transition window status off the clock
+(planned -> in_progress -> completed), then re-push every non-terminal
+window to its deployment(s) — which also retries any push that failed
+earlier and fires the "reminder" notify once a window is within
+MAINTENANCE_REMINDER_HOURS of its start (services/maintenance_push derives
+that per target).
 
 Assumes a single hub process (the Dockerfile runs one uvicorn worker, no
 Celery). If the hub ever goes multi-worker this loop needs a leader-election
@@ -61,12 +64,31 @@ async def _auto_transition(db) -> None:
 
     for w in (*to_start, *to_finish, *expired_planned):
         logger.info("maintenance window %s -> %s", w.id, w.status.value)
+        # Completed windows won't be picked up by _push_pending below, so
+        # push them here to release the deployment's banner/gate promptly.
+        await sync_window(db, w)
+
+
+async def _push_pending(db) -> None:
+    """Re-push every still-relevant window: retries a failed push and fires
+    the reminder notify when it comes due (both idempotent per target)."""
+    now = datetime.utcnow()
+    windows = (await db.execute(
+        select(MaintenanceWindow).where(
+            MaintenanceWindow.status.in_(
+                [MaintenanceWindowStatus.planned, MaintenanceWindowStatus.in_progress]
+            ),
+            MaintenanceWindow.scheduled_end > now,
+        )
+    )).scalars().all()
+    for w in windows:
         await sync_window(db, w)
 
 
 async def _tick() -> None:
     async with AsyncSessionLocal() as db:
         await _auto_transition(db)
+        await _push_pending(db)
         await db.commit()
 
 

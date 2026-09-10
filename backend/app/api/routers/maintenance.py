@@ -14,7 +14,7 @@ from app.models import MaintenanceWindow, MaintenanceWindowStatus, User
 from app.schemas import (
     MaintenanceWindowCreate, MaintenanceWindowListResponse, MaintenanceWindowOut, MaintenanceWindowUpdate,
 )
-from app.services.maintenance_push import sync_window
+from app.services.maintenance_push import clear_reminders, sync_window
 
 router = APIRouter(
     prefix="/maintenance-windows", tags=["maintenance"],
@@ -51,8 +51,12 @@ async def update_window(window_id: str, body: MaintenanceWindowUpdate, db: Async
     w = (await db.execute(select(MaintenanceWindow).where(MaintenanceWindow.id == window_id))).scalar_one_or_none()
     if not w:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Maintenance window not found")
+    old_start = w.scheduled_start
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(w, field, value)
+    if w.scheduled_start < old_start:
+        # Moved earlier — let a fresh reminder fire against the new time.
+        clear_reminders(w)
     await db.flush()
     # Push the updated list to every affected deployment — a cancelled or
     # rescheduled window drops out of / changes in active_windows_for, so

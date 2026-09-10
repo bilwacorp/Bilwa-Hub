@@ -9,8 +9,12 @@ import { DataTable, type Column } from '../../components/ui/DataTable'
 import { Badge } from '../../components/ui/Badge'
 import { Modal } from '../../components/ui/Modal'
 import { Input } from '../../components/ui/Input'
+import { Select } from '../../components/ui/Select'
 import { Button } from '../../components/ui/Button'
-import type { MaintenanceWindow, MaintenanceWindowListResponse, MaintenanceWindowStatus } from '../../types'
+import type {
+  Deployment, DeploymentListResponse,
+  MaintenanceWindow, MaintenanceWindowListResponse, MaintenanceWindowStatus,
+} from '../../types'
 
 const STATUS_VARIANT: Record<MaintenanceWindowStatus, 'blue' | 'amber' | 'green' | 'gray'> = {
   planned: 'blue',
@@ -19,7 +23,13 @@ const STATUS_VARIANT: Record<MaintenanceWindowStatus, 'blue' | 'amber' | 'green'
   cancelled: 'gray',
 }
 
-type NewWindowForm = { scheduled_start: string; scheduled_end: string; description: string; read_only: boolean }
+type NewWindowForm = {
+  deployment_id: string
+  scheduled_start: string
+  scheduled_end: string
+  description: string
+  read_only: boolean
+}
 
 export default function MaintenanceWindowsPage() {
   const qc = useQueryClient()
@@ -28,19 +38,27 @@ export default function MaintenanceWindowsPage() {
     queryFn: () => api.get<MaintenanceWindowListResponse>('/maintenance-windows').then((r) => r.data),
     refetchInterval: 30_000,
   })
+  const { data: deployments } = useQuery({
+    queryKey: ['deployments'],
+    queryFn: () => api.get<DeploymentListResponse>('/deployments').then((r) => r.data),
+  })
+  const deploymentName = (id: string | null) =>
+    id ? (deployments?.items.find((d) => d.id === id)?.client_name ?? 'Single deployment') : 'Fleet-wide'
 
   const [showCreate, setShowCreate] = useState(false)
-  const form = useForm<NewWindowForm>({ defaultValues: { read_only: false } })
+  const form = useForm<NewWindowForm>({ defaultValues: { read_only: false, deployment_id: '' } })
   const createMutation = useMutation({
     // datetime-local gives a naive *local* string; the backend stores naive
     // UTC — convert here so a window scheduled for "14:00" means 14:00 the
     // operator's time, not 14:00 UTC.
     mutationFn: (v: NewWindowForm) => api.post('/maintenance-windows', {
-      ...v,
+      deployment_id: v.deployment_id || null,
+      description: v.description,
+      read_only: v.read_only,
       scheduled_start: new Date(v.scheduled_start).toISOString(),
       scheduled_end: new Date(v.scheduled_end).toISOString(),
     }),
-    onSuccess: () => { toast.success('Maintenance window created'); setShowCreate(false); form.reset({ read_only: false }); qc.invalidateQueries({ queryKey: ['maintenance-windows'] }) },
+    onSuccess: () => { toast.success('Maintenance window created'); setShowCreate(false); form.reset({ read_only: false, deployment_id: '' }); qc.invalidateQueries({ queryKey: ['maintenance-windows'] }) },
     onError: () => toast.error('Failed to create maintenance window'),
   })
 
@@ -54,7 +72,7 @@ export default function MaintenanceWindowsPage() {
     { key: 'scheduled_start', header: 'Start', render: (w) => formatDate(w.scheduled_start) },
     { key: 'scheduled_end', header: 'End', render: (w) => formatDate(w.scheduled_end) },
     { key: 'description', header: 'Description' },
-    { key: 'scope', header: 'Scope', render: (w) => w.deployment_id ? 'Single deployment' : 'Fleet-wide' },
+    { key: 'scope', header: 'Scope', render: (w) => deploymentName(w.deployment_id) },
     { key: 'read_only', header: 'Mode', render: (w) => w.read_only ? <Badge variant="red">Read-only</Badge> : <span className="text-muted text-xs">Banner only</span> },
     { key: 'status', header: 'Status', render: (w) => <Badge variant={STATUS_VARIANT[w.status]}>{w.status.replace('_', ' ')}</Badge> },
     {
@@ -85,9 +103,17 @@ export default function MaintenanceWindowsPage() {
         footer={<><Button variant="secondary" onClick={() => setShowCreate(false)}>Cancel</Button><Button loading={createMutation.isPending} onClick={form.handleSubmit((v) => createMutation.mutate(v))}>Create</Button></>}
       >
         <form className="space-y-4">
+          <Select
+            label="Applies to"
+            placeholder="Fleet-wide (all deployments)"
+            options={(deployments?.items ?? [])
+              .filter((d: Deployment) => d.status === 'active')
+              .map((d: Deployment) => ({ value: d.id, label: d.client_name }))}
+            {...form.register('deployment_id')}
+          />
           <Input type="datetime-local" label="Start" {...form.register('scheduled_start', { required: true })} />
           <Input type="datetime-local" label="End" {...form.register('scheduled_end', { required: true })} />
-          <Input label="Description" placeholder="e.g. Fleet-wide DB maintenance" {...form.register('description', { required: true })} />
+          <Input label="Description" placeholder="e.g. Database upgrade" {...form.register('description', { required: true })} />
           <label className="flex items-start gap-2 text-sm text-text">
             <input type="checkbox" className="mt-0.5" {...form.register('read_only')} />
             <span>
@@ -98,7 +124,7 @@ export default function MaintenanceWindowsPage() {
               </span>
             </span>
           </label>
-          <p className="text-xs text-muted">Fleet-wide only for now — leave deployment unset. Clients see an in-app banner; their admins get an email once Phase 2 ships.</p>
+          <p className="text-xs text-muted">Clients see an in-app banner immediately; their admins get an email once Phase 2 ships.</p>
         </form>
       </Modal>
     </div>
