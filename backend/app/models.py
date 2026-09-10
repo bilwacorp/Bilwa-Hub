@@ -120,8 +120,13 @@ class MaintenanceWindowStatus(str, enum.Enum):
 
 
 class MaintenanceWindow(Base):
-    """Plain scheduling record — no automation/reminders in Phase 1 (per
-    the plan). deployment_id NULL means fleet-wide."""
+    """A scheduled maintenance window. `deployment_id` NULL = fleet-wide.
+    The maintenance_scheduler loop auto-transitions status
+    (planned -> in_progress -> completed) off scheduled_start/scheduled_end
+    and pushes changes to affected deployments (services/deployment_client
+    .push_maintenance) so their in-app banner / read-only gate track it.
+    All datetimes are naive UTC, like everything else here — schemas that
+    expose them append an explicit offset (see MaintenanceWindowPublic)."""
     __tablename__ = "maintenance_windows"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -130,6 +135,17 @@ class MaintenanceWindow(Base):
     scheduled_end: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[MaintenanceWindowStatus] = mapped_column(Enum(MaintenanceWindowStatus), default=MaintenanceWindowStatus.planned, nullable=False)
+    # Opt-in: while an active window with this set is in force, the
+    # deployment returns 503 for mutating requests (its
+    # maintenance_gate_middleware). Default off — a window is just a banner
+    # unless someone deliberately ticks this.
+    read_only: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Per-deployment push bookkeeping so a fleet-wide window can be
+    # pushed/retried to each deployment independently. Shape:
+    #   { "<deployment_uuid>": {
+    #       "notice_at": iso|null, "reminder_at": iso|null,
+    #       "last_status": "in_progress"|null, "status_pushed_at": iso|null } }
+    push_state: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 

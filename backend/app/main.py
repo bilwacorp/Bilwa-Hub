@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.casbin_enforcer import init_enforcer
 from app.core.casbin_watcher import start_watcher, stop_watcher
+from app.core.maintenance_scheduler import start_scheduler, stop_scheduler
 from app.api.routers import auth, register, ingest, deployments, tickets, maintenance
 
 logging.basicConfig(level=settings.LOG_LEVEL)
@@ -33,9 +34,11 @@ async def lifespan(app: FastAPI):
             logger.warning("init_enforcer failed (attempt %d/5), retrying in 2s", attempt + 1, exc_info=True)
             await asyncio.sleep(2)
     start_watcher()
+    start_scheduler()
 
     yield
 
+    stop_scheduler()
     stop_watcher()
 
 

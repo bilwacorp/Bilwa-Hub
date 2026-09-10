@@ -29,6 +29,8 @@ export interface DeploymentSnapshot {
   received_at: string
 }
 
+export type DerivedDeploymentStatus = 'never' | 'online' | 'stale' | 'offline' | 'maintenance'
+
 export interface Deployment {
   id: string
   client_name: string
@@ -37,6 +39,8 @@ export interface Deployment {
   status: DeploymentStatus
   created_at: string
   latest_snapshot: DeploymentSnapshot | null
+  heartbeat_age_seconds: number | null
+  derived_status: DerivedDeploymentStatus
 }
 
 export interface DeploymentListResponse {
@@ -77,6 +81,7 @@ export interface MaintenanceWindow {
   scheduled_end: string
   description: string
   status: MaintenanceWindowStatus
+  read_only: boolean
   created_at: string
 }
 

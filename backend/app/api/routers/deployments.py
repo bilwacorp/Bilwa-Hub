@@ -3,20 +3,23 @@ requires STAFF_MANAGE (see core/permissions.py — Phase 1 has just the one
 role/permission)."""
 import hashlib
 import secrets
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.permissions import STAFF_MANAGE, require_permission
 from app.db.session import get_db
-from app.models import Deployment, DeploymentSnapshot, DeploymentStatus, User
+from app.models import Deployment, DeploymentSnapshot, DeploymentStatus, MaintenanceWindow, User
 from app.schemas import (
     ChangePlanActionRequest, DeploymentCreate, DeploymentCreateOut, DeploymentListResponse,
     DeploymentOut, DeploymentSnapshotOut, ExtendExpiryActionRequest, ReissueTokenOut,
     RenewActionRequest, SubscriptionRequestReviewAction, SuspendActionRequest,
 )
 from app.services import deployment_client
+from app.services.maintenance_query import currently_active_windows
 
 router = APIRouter(prefix="/deployments", tags=["deployments"], dependencies=[Depends(require_permission(*STAFF_MANAGE))])
 
@@ -28,10 +31,30 @@ async def _latest_snapshot(db: AsyncSession, deployment_id) -> DeploymentSnapsho
     )).scalar_one_or_none()
 
 
-async def _to_out(db: AsyncSession, d: Deployment) -> DeploymentOut:
+def _derive_status(d, snap, active_windows: list[MaintenanceWindow]):
+    """(heartbeat_age_seconds, derived_status). A live maintenance window
+    (this deployment or fleet-wide) shows as 'maintenance' regardless of
+    heartbeat age — quiet-during-a-window is expected, not a fault."""
+    in_maintenance = any(
+        w.deployment_id is None or w.deployment_id == d.id for w in active_windows
+    )
+    if snap is None:
+        return None, ("maintenance" if in_maintenance else "never")
+    age = int((datetime.utcnow() - snap.received_at).total_seconds())
+    if in_maintenance:
+        return age, "maintenance"
+    if age > settings.HEARTBEAT_OFFLINE_HOURS * 3600:
+        return age, "offline"
+    if age > settings.HEARTBEAT_STALE_HOURS * 3600:
+        return age, "stale"
+    return age, "online"
+
+
+async def _to_out(db: AsyncSession, d: Deployment, active_windows: list[MaintenanceWindow]) -> DeploymentOut:
     snap = await _latest_snapshot(db, d.id)
     out = DeploymentOut.model_validate(d)
     out.latest_snapshot = DeploymentSnapshotOut.model_validate(snap) if snap else None
+    out.heartbeat_age_seconds, out.derived_status = _derive_status(d, snap, active_windows)
     return out
 
 
@@ -68,13 +91,14 @@ async def list_deployments(
     rows = (await db.execute(
         select(Deployment).order_by(Deployment.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
     )).scalars().all()
-    return DeploymentListResponse(total=total, items=[await _to_out(db, d) for d in rows])
+    active_windows = await currently_active_windows(db)
+    return DeploymentListResponse(total=total, items=[await _to_out(db, d, active_windows) for d in rows])
 
 
 @router.get("/{deployment_id}", response_model=DeploymentOut)
 async def get_deployment(deployment_id: str, db: AsyncSession = Depends(get_db)):
     d = await _get_or_404(db, deployment_id)
-    return await _to_out(db, d)
+    return await _to_out(db, d, await currently_active_windows(db))
 
 
 @router.post("/{deployment_id}/reissue-token", response_model=ReissueTokenOut)

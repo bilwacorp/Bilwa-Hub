@@ -65,3 +65,12 @@ async def review_request(deployment: Deployment, *, request_id: str, status: str
         deployment, "PATCH", f"/subscription/requests/{request_id}",
         {"status": status, "review_note": review_note},
     )
+
+
+async def push_maintenance(deployment: Deployment, *, windows: list[dict], notify: Optional[dict] = None) -> dict:
+    """Replace the deployment's whole maintenance-window list. `windows` are
+    MaintenanceWindowPublic.model_dump(mode="json") dicts. `notify`, when
+    set ({window_id, kind}), tells the deployment to email its admins about
+    that one window. Matches PoultryOS-CBP's api/v1/routers/hub_integration
+    .py POST /hub/maintenance."""
+    return await _call(deployment, "POST", "/maintenance", {"maintenance": windows, "notify": notify})

@@ -13,14 +13,17 @@ import { Modal } from '../../components/ui/Modal'
 import { Badge } from '../../components/ui/Badge'
 import type { Deployment, DeploymentListResponse, DeploymentCreateOut } from '../../types'
 
+// derived_status is computed server-side (api/routers/deployments.py) — it
+// folds heartbeat age together with any live maintenance window.
 function healthDot(d: Deployment): { color: string; label: string } {
-  if (!d.latest_snapshot) return { color: 'bg-hint', label: 'No heartbeat yet' }
-  const receivedAt = new Date(d.latest_snapshot.received_at).getTime()
-  const hoursSince = (Date.now() - receivedAt) / (1000 * 60 * 60)
-  // Heartbeats are every 2h — anything over 2x that interval without a
-  // fresh one is worth flagging as stale rather than assumed-healthy.
-  if (hoursSince > 4) return { color: 'bg-danger', label: `Last heartbeat ${formatDate(d.latest_snapshot.received_at)}` }
-  return { color: 'bg-success', label: `Last heartbeat ${formatDate(d.latest_snapshot.received_at)}` }
+  const last = d.latest_snapshot ? `Last heartbeat ${formatDate(d.latest_snapshot.received_at)}` : 'No heartbeat yet'
+  switch (d.derived_status) {
+    case 'maintenance': return { color: 'bg-warning', label: 'Under maintenance' }
+    case 'offline': return { color: 'bg-danger', label: `Offline — ${last}` }
+    case 'stale': return { color: 'bg-warning', label: `Stale — ${last}` }
+    case 'online': return { color: 'bg-success', label: last }
+    default: return { color: 'bg-hint', label: 'No heartbeat yet' }
+  }
 }
 
 export default function DeploymentsListPage() {

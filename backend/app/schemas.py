@@ -1,10 +1,32 @@
 import uuid
-from datetime import date, datetime
-from typing import List, Optional
+from datetime import date, datetime, timezone
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer, field_validator
 
 from app.models import DeploymentStatus, MaintenanceWindowStatus, SupportTicketStatus
+
+
+def _to_naive_utc(dt: datetime) -> datetime:
+    """Every datetime column here is naive UTC. The frontend sends
+    `.toISOString()` (a '...Z' aware value) — convert to UTC and drop
+    tzinfo so it stores cleanly and compares against datetime.utcnow()."""
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _utc_iso(dt: Optional[datetime]) -> Optional[str]:
+    """All datetime columns here are naive UTC. Pydantic would serialize
+    them with no offset, and a browser's `new Date("2026-09-10T14:00:00")`
+    then parses that as *local* time — an IST client's maintenance-window
+    math would be 5.5h off. Emit an explicit +00:00 so every consumer
+    (deployment gate, in-app banner, hub UI) parses UTC unambiguously."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
 
 
 # ── auth ─────────────────────────────────────────────────────────────────
@@ -71,6 +93,43 @@ class HeartbeatRequest(BaseModel):
     pending_requests: List[PendingRequestIn] = []
 
 
+class MaintenanceWindowPublic(BaseModel):
+    """The window shape sent to a deployment — in the heartbeat response and
+    in the hub->deployment push. Timestamps carry an explicit UTC offset
+    (see _utc_iso)."""
+    id: uuid.UUID
+    scheduled_start: datetime
+    scheduled_end: datetime
+    description: str
+    status: MaintenanceWindowStatus
+    read_only: bool
+
+    model_config = {"from_attributes": True}
+
+    @field_serializer("scheduled_start", "scheduled_end")
+    def _ser_dt(self, dt: datetime) -> str:
+        return _utc_iso(dt)
+
+
+class HeartbeatResponse(BaseModel):
+    status: str = "ok"
+    maintenance: List[MaintenanceWindowPublic] = []
+
+
+class MaintenanceNotify(BaseModel):
+    window_id: uuid.UUID
+    kind: Literal["scheduled", "reminder"]
+
+
+class MaintenancePushRequest(BaseModel):
+    """Body of POST {deployment}/api/v1/hub/maintenance. `maintenance` is the
+    deployment's full current window list (a replace, not a merge). `notify`,
+    when set, names one window + kind the deployment should email its admins
+    about."""
+    maintenance: List[MaintenanceWindowPublic]
+    notify: Optional[MaintenanceNotify] = None
+
+
 class SupportTicketIngest(BaseModel):
     subject: str
     description: str
@@ -117,6 +176,11 @@ class DeploymentOut(BaseModel):
     status: DeploymentStatus
     created_at: datetime
     latest_snapshot: Optional[DeploymentSnapshotOut] = None
+    # Seconds since the last heartbeat (None if never). derived_status folds
+    # that together with any active maintenance window into one label the
+    # deployments list renders directly — see api/routers/deployments.py.
+    heartbeat_age_seconds: Optional[int] = None
+    derived_status: Literal["never", "online", "stale", "offline", "maintenance"] = "never"
 
     model_config = {"from_attributes": True}
 
@@ -185,6 +249,12 @@ class MaintenanceWindowCreate(BaseModel):
     scheduled_start: datetime
     scheduled_end: datetime
     description: str
+    read_only: bool = False
+
+    @field_validator("scheduled_start", "scheduled_end")
+    @classmethod
+    def _naive_utc(cls, v: datetime) -> datetime:
+        return _to_naive_utc(v)
 
 
 class MaintenanceWindowUpdate(BaseModel):
@@ -192,6 +262,12 @@ class MaintenanceWindowUpdate(BaseModel):
     scheduled_end: Optional[datetime] = None
     description: Optional[str] = None
     status: Optional[MaintenanceWindowStatus] = None
+    read_only: Optional[bool] = None
+
+    @field_validator("scheduled_start", "scheduled_end")
+    @classmethod
+    def _naive_utc(cls, v: Optional[datetime]) -> Optional[datetime]:
+        return _to_naive_utc(v) if v is not None else v
 
 
 class MaintenanceWindowOut(BaseModel):
@@ -201,9 +277,14 @@ class MaintenanceWindowOut(BaseModel):
     scheduled_end: datetime
     description: str
     status: MaintenanceWindowStatus
+    read_only: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("scheduled_start", "scheduled_end")
+    def _ser_dt(self, dt: datetime) -> str:
+        return _utc_iso(dt)
 
 
 class MaintenanceWindowListResponse(BaseModel):

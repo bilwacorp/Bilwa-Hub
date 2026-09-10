@@ -10,12 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_deployment_from_api_key
 from app.db.session import get_db
 from app.models import Deployment, DeploymentSnapshot, SupportTicket
-from app.schemas import HeartbeatRequest, SupportTicketIngest
+from app.schemas import (
+    HeartbeatRequest, HeartbeatResponse, MaintenanceWindowPublic, SupportTicketIngest,
+)
+from app.services.maintenance_query import active_windows_for
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
 
-@router.post("/heartbeat")
+@router.post("/heartbeat", response_model=HeartbeatResponse)
 async def ingest_heartbeat(
     body: HeartbeatRequest,
     db: AsyncSession = Depends(get_db),
@@ -37,7 +40,11 @@ async def ingest_heartbeat(
     )
     db.add(snapshot)
     await db.flush()
-    return {"status": "ok"}
+
+    # The heartbeat response carries this deployment's maintenance windows —
+    # a self-healing resync in case a hub->deployment push was missed.
+    windows = await active_windows_for(db, deployment.id)
+    return HeartbeatResponse(maintenance=[MaintenanceWindowPublic.model_validate(w) for w in windows])
 
 
 @router.post("/support-ticket")

@@ -29,6 +29,17 @@ class Settings(BaseSettings):
     # cannot run its core inbound-action feature at all without this.
     HUB_ENCRYPTION_KEY: str
 
+    # ── maintenance scheduling (core/maintenance_scheduler.py) ────────────
+    # How often the scheduler loop wakes to auto-transition window statuses
+    # and push reminders. 5 min is plenty — windows are scheduled hours out.
+    MAINTENANCE_SCHEDULER_INTERVAL_SECONDS: int = 300
+    # A "reminder" push goes out this many hours before a window's start.
+    MAINTENANCE_REMINDER_HOURS: int = 24
+    # Heartbeat age (hours) past which a deployment shows "stale", then
+    # "offline", on the deployments list. 4h = 2x the 2h heartbeat cadence.
+    HEARTBEAT_STALE_HOURS: int = 4
+    HEARTBEAT_OFFLINE_HOURS: int = 8
+
     class Config:
         env_file = ".env"
         extra = "ignore"
