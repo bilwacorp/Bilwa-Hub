@@ -51,16 +51,16 @@ npm run build    # tsc + vite build
 ```
 
 ### Whole stack (Docker)
-```bash
-docker compose up --build   # postgres + backend + frontend; needs POSTGRES_PASSWORD,
-                            # SECRET_KEY, HUB_ENCRYPTION_KEY (+ optional HUB_PUBLIC_URL)
-                            # in a .env next to docker-compose.yml
-```
-`docker-compose.yml` is also the Dokploy deploy unit — see README's
-"Deploying (Dokploy)". `frontend`'s nginx serves the SPA and proxies `/api`
-to `backend` on the compose network, so it's one origin (the auth cookie is
-`SameSite=Lax; Path=/api` — cross-origin would break it) and `backend`
-never needs its own public domain.
+`docker-compose.yml` (`backend` + `frontend`, DB external) is the Dokploy
+deploy unit — see README's "Deploying (Dokploy)" for env vars and network
+setup. `frontend`'s nginx serves the SPA and proxies `/api` to the backend
+via the `hub-api-internal` alias on a private network, so it's one origin
+(the auth cookie is `SameSite=Lax; Path=/api` — cross-origin would break
+it) and `backend` never needs its own public domain. `backend` is also on
+`dokploy-network` to reach the managed Postgres, with an entrypoint
+route-fix (`backend/docker-entrypoint.sh`, ported from PoultryOS-CBP) so
+its outbound calls to client deployments aren't blackholed — same dual-
+network gotcha this host has.
 
 URLs: Backend `http://localhost:8000/api/v1` (no `/docs` Swagger check done
 yet — verify it's enabled the same way PoultryOS-CBP's is if you need it).

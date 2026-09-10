@@ -53,27 +53,30 @@ npm run dev
 
 ## Deploying (Dokploy)
 
-The whole hub is one `docker-compose.yml` — `postgres` + `backend` +
-`frontend` (nginx serving the SPA and proxying `/api` to `backend` on the
-compose network, so everything is one origin and the auth cookie works).
+The hub is one `docker-compose.yml` — `backend` + `frontend` (nginx serves
+the SPA and proxies `/api` to the backend on a private network, so it's one
+origin and the auth cookie works). The database is **not** in the stack.
 
-1. In Dokploy, **Create Service → Compose**, point it at this repo
-   (`main` branch), compose file `docker-compose.yml`.
-2. **Environment tab** — set:
-   - `POSTGRES_PASSWORD` — any strong random string
+1. **Create Service → Database → Postgres** in Dokploy. Note its internal
+   connection details.
+2. **Create Service → Compose**, point it at this repo (`main` branch),
+   compose file `docker-compose.yml`.
+3. **Environment tab** on the Compose service — set:
+   - `DATABASE_URL` — the Postgres from step 1, asyncpg form:
+     `postgresql+asyncpg://user:pass@<db-service-name>:5432/dbname`
    - `SECRET_KEY` — random, 32+ chars
    - `HUB_ENCRYPTION_KEY` — `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
-   - `HUB_PUBLIC_URL` — the public URL you'll give this hub, e.g. `https://hub.bilwacorp.example`
-3. **Domains tab** — add your domain, routed to service **`frontend`**, port **`80`**. Leave `backend` and `postgres` with no domain.
-4. Deploy. `backend`'s container runs `alembic upgrade head` on every start,
-   so the schema + seeded admin are created automatically.
-5. Log in with `admin` / `ChangeMe@2026` and **change the password
+   - `DOKPLOY_NETWORK_SUBNET` — dokploy-network's CIDR (same value the
+     PoultryOS-CBP deployments on this host already use)
+   - `HUB_PUBLIC_URL` — the public URL you'll give this hub
+   - `DB_SSL_MODE` — leave unset (defaults to `disable`, right for an
+     internal Dokploy DB); set to `require` only if the DB enforces TLS
+4. **Domains tab** — add your domain, routed to service **`frontend`**,
+   port **`80`**. Leave `backend` with no domain.
+5. Deploy. `backend` runs `alembic upgrade head` on every start, so the
+   schema + seeded admin are created automatically.
+6. Log in with `admin` / `ChangeMe@2026` and **change the password
    immediately** (see below).
-
-Postgres runs in the stack with a named volume (`hub_pgdata`). If you'd
-rather use a Dokploy-managed database for automated backups, delete the
-`postgres` service from the compose file and point `DATABASE_URL` at the
-managed one.
 
 ## Connecting a new client deployment
 
