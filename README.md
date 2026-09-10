@@ -51,21 +51,23 @@ npm install
 npm run dev
 ```
 
-## Registering a new client deployment
+## Connecting a new client deployment
 
-1. Log in to the hub, go to Deployments → New Deployment. Copy the
-   one-time `registration_token` shown (it's never shown again).
+Full runbook (prerequisites, exact API calls, network requirements,
+troubleshooting, the credential model): **`docs/CONNECTING_A_DEPLOYMENT.md`**
+— also summarized in `CLAUDE.md`. Short version:
+
+1. Log in to the hub, go to Deployments → New Deployment (or
+   `POST /api/v1/deployments`). Copy the one-time `registration_token`
+   shown (it's never shown again).
 2. In that new client's own Dokploy project, set on the **celery-worker**
-   service only: `HUB_URL` (this hub's base URL) and
-   `HUB_REGISTRATION_TOKEN` (the token from step 1). Also add
-   `FRONTEND_URL` there if it isn't already (see the plan — celery-worker
-   didn't previously need it).
-3. Redeploy that client. Within a few seconds of boot (and every 2h after)
-   its `celery-worker` will register and start sending heartbeats — no
-   further manual step.
-4. If the token is lost before registration completes (e.g. a botched
-   deploy), use "Reissue Token" on that deployment's detail page rather
-   than creating a new Deployment row.
+   service only: `HUB_URL`, `HUB_REGISTRATION_TOKEN` (from step 1), and
+   `FRONTEND_URL` if it isn't already set there.
+3. Redeploy that client. Within seconds of boot (and every 2h after) its
+   `celery-worker` registers and starts sending heartbeats — no further
+   manual step.
+4. Lost the token before registration completed? Use "Reissue Token" on
+   that deployment's detail page rather than creating a new row.
 
 ## What's deliberately NOT in Phase 1
 
