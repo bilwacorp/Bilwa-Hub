@@ -16,10 +16,14 @@ relayed from each deployment and tracks maintenance windows across the
 fleet.
 
 This is **Phase 1**: registration, heartbeat, inbound actions, support
-tickets, maintenance windows. No permission catalog/roles UI (one hardcoded
-staff role), no per-device sessions, no notification emails from the hub
-itself. See `README.md`'s "What's deliberately NOT in Phase 1" and the
-original design plan quoted there for the full rationale.
+tickets, maintenance windows. No per-device sessions, no notification
+emails from the hub itself. See `README.md`'s "What's deliberately NOT in
+Phase 1" and the original design plan quoted there for the full rationale.
+
+Staff user management + two roles (`admin`, `engineer`) landed after
+Phase 1 as a small follow-on — see "The permission model" below. There is
+still no general permission *catalog*/roles UI: the two roles and what
+each one grants are hardcoded, not admin-configurable.
 
 **Connecting a new client deployment to this hub is a full runbook of its
 own — see `docs/CONNECTING_A_DEPLOYMENT.md` before doing this for real.**
@@ -76,9 +80,13 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 ### Seeded login
 `alembic/versions/002_seed_admin.py` creates one staff account:
-`admin` / `ChangeMe@2026`. No self-service password-change endpoint in
-Phase 1 — change it by editing `users.hashed_password` (bcrypt) directly,
-or re-seed against a fresh DB with a different constant.
+`admin` / `ChangeMe@2026`. Additional staff (either role) are created from
+the "Staff" page (admin-only) once logged in — see "The permission model"
+above. Still no *self*-service password-change endpoint — an admin resets
+another user's password via that page's "Reset password" action; to
+change the seeded admin's own password before a second admin exists, edit
+`users.hashed_password` (bcrypt) directly, or re-seed against a fresh DB
+with a different constant.
 
 ---
 
@@ -98,14 +106,20 @@ core/deps.py          Ported from PoultryOS-CBP: _BearerOrCookie + get_current_u
                       (token_version-based revocation). Deliberately dropped: UserSession/
                       "sid" per-device tracking, mobile-vs-web client split — Phase 1 has
                       exactly one staff login, web-only.
-core/permissions.py   Single STAFF_MANAGE permission, granted to the one seeded 'admin'
-                      role. require_permission()'s shape is ported from PoultryOS-CBP so a
-                      later phase can grow a real per-resource catalog without changing how
-                      routes are gated. register.py/ingest.py are NOT Casbin-gated at all —
-                      they're machine-to-machine, shared-secret authenticated instead.
+core/permissions.py   Two permissions: STAFF_MANAGE (staff/user management, admin-only) and
+                      FLEET_MANAGE (deployments/tickets/maintenance, granted to both 'admin'
+                      and 'engineer' — see "The permission model" below). require_permission()'s
+                      shape is ported from PoultryOS-CBP so a later phase can keep growing a
+                      real per-resource catalog without changing how routes are gated.
+                      register.py/ingest.py are NOT Casbin-gated at all — they're
+                      machine-to-machine, shared-secret authenticated instead.
 core/casbin_enforcer.py, core/casbin_watcher.py, core/rbac_model.conf
                       Ported near-verbatim from PoultryOS-CBP — generic, no app-specific
                       content in rbac_model.conf.
+services/rbac.py      Role assignment for staff users (get_role/set_role/count_active_admins)
+                      on top of the Casbin enforcer's domain-aware RBAC API — see
+                      api/routers/users.py. A user's role lives only as a Casbin `g` grouping
+                      row, not a column on User.
 services/crypto.py    Fernet encrypt/decrypt for Deployment.action_key_encrypted — mirrors
                       PoultryOS-CBP's User.totp_secret_encrypted pattern (reversible storage
                       is the exception, not the rule; see "Two credentials" below).
@@ -123,11 +137,15 @@ api/routers/
   register.py         POST /register — public, single-use registration_token auth, not JWT
   ingest.py            POST /ingest/heartbeat, POST /ingest/support-ticket — api_key bearer
                       auth (hash-compared against Deployment.api_key_hash)
-  deployments.py        staff-only (STAFF_MANAGE): create pending deployment + token, list,
-                      detail (+ latest snapshot), reissue-token, and the inbound-action
+  deployments.py        FLEET_MANAGE (admin + engineer): create pending deployment + token,
+                      list, detail (+ latest snapshot), reissue-token, and the inbound-action
                       triggers (renew/suspend/change-plan/extend-expiry/review-request)
-  tickets.py            staff-only: list/detail/update support tickets
-  maintenance.py        staff-only: plain CRUD on maintenance windows, no automation
+  tickets.py            FLEET_MANAGE: list/detail/update support tickets
+  maintenance.py        FLEET_MANAGE: plain CRUD on maintenance windows, no automation
+  users.py              STAFF_MANAGE (admin only): staff account CRUD (deactivate, not hard
+                      delete — MaintenanceWindow.created_by FKs to users.id) + role
+                      assignment. Guards against self-lockout (can't deactivate/change your
+                      own role) and against dropping the last active admin.
 ```
 
 ### Frontend — `frontend/src/`
@@ -147,7 +165,35 @@ pages/deployments/DeploymentDetailPage.tsx   latest snapshot (including pending_
                                               buttons, request-review actions
 pages/tickets/SupportTicketsPage.tsx         fleet-wide ticket table + status update
 pages/maintenance/MaintenanceWindowsPage.tsx list + create/edit, no automation
+pages/users/StaffUsersPage.tsx               admin-only: staff table (role/active inline
+                                              editors, reset-password), "Staff" nav item in
+                                              App.tsx's Shell only renders for role='admin'
 ```
+
+### The permission model (admin / engineer)
+
+Two Casbin permissions, both defined in `core/permissions.py`:
+
+- **`STAFF_MANAGE`** (`staff:manage`) — staff account CRUD + role assignment
+  (`api/routers/users.py`). Granted only to `admin`.
+- **`FLEET_MANAGE`** (`fleet:manage`) — deployments, tickets, maintenance
+  windows. Granted to both `admin` and `engineer`.
+
+A user's role is a Casbin `g` grouping row (`services/rbac.py`), not a
+column on `User` — one role per user, replaced wholesale on change, not
+stacked. `alembic/versions/005_staff_roles_and_fleet_permission.py` is
+where the `p` rules granting each role its permissions were seeded; new
+roles beyond `admin`/`engineer` would need a migration (or a one-off
+`INSERT INTO casbin_rule`) the same way, since there's still no
+roles-catalog UI.
+
+`api/routers/users.py` guards two footguns directly (not via Casbin):
+an admin can't deactivate or change their own role (must ask another
+admin), and no edit may drop the last active admin (`rbac.count_active_admins`).
+Deactivating/resetting a user's password bumps `token_version`
+(`core/deps.get_current_user` already checks it) — but a deactivated
+user is rejected immediately regardless, since `is_active` is re-checked
+live on every request, not just baked into the JWT.
 
 ### The two-credential design (read before touching auth/registration code)
 

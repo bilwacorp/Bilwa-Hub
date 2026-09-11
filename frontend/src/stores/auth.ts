@@ -1,16 +1,18 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { StaffRole } from '../types'
 
-interface StaffUser {
+interface LoggedInUser {
   id: string
   username: string
   full_name: string | null
+  role: StaffRole | null
 }
 
 interface AuthState {
-  user: StaffUser | null
+  user: LoggedInUser | null
   isAuthenticated: boolean
-  setUser: (user: StaffUser) => void
+  setUser: (user: LoggedInUser) => void
   clearAuth: () => void
 }
 

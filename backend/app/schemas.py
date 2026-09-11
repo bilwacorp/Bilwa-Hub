@@ -46,13 +46,58 @@ class TokenResponse(BaseModel):
     expires_in: int
 
 
+# admin: full access, incl. managing other staff accounts (STAFF_MANAGE).
+# engineer: fleet access (deployments/tickets/maintenance, FLEET_MANAGE) but
+# cannot manage staff. See core/permissions.py and services/rbac.py.
+StaffRole = Literal["admin", "engineer"]
+
+
 class UserOut(BaseModel):
     id: uuid.UUID
     username: str
     full_name: Optional[str]
     email: Optional[str]
+    role: Optional[StaffRole] = None
 
     model_config = {"from_attributes": True}
+
+
+# ── staff / user management ─────────────────────────────────────────────
+
+class StaffUserCreate(BaseModel):
+    username: str
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    password: str
+    role: StaffRole
+
+
+class StaffUserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    is_active: Optional[bool] = None
+    role: Optional[StaffRole] = None
+
+
+class StaffUserOut(BaseModel):
+    id: uuid.UUID
+    username: str
+    full_name: Optional[str]
+    email: Optional[str]
+    is_active: bool
+    role: Optional[StaffRole] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class StaffUserListResponse(BaseModel):
+    total: int
+    items: List[StaffUserOut]
+
+
+class PasswordResetRequest(BaseModel):
+    new_password: str
 
 
 # ── registration / ingest ───────────────────────────────────────────────

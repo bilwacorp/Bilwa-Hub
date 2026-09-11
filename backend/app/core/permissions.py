@@ -1,9 +1,12 @@
-"""Permissions — Phase 1 deliberately has no catalog table or roles UI (see
-the plan's "Casbin on day one" section): every staff route requires the
-same single STAFF_MANAGE permission, granted to the one seeded 'admin' role
-(alembic/versions/002_seed_admin.py). require_permission()'s shape is
-ported from PoultryOS-CBP's core/permissions.py so a future phase can grow
-a real per-resource catalog without changing how routes are gated."""
+"""Permissions — Phase 1 shipped with no catalog table or roles UI, a
+single STAFF_MANAGE permission gating every staff route. This is the first
+real per-resource split: STAFF_MANAGE now covers only staff/user
+management (admin-only), and FLEET_MANAGE covers deployments/tickets/
+maintenance (granted to both 'admin' and 'engineer' — see
+alembic/versions/005_staff_roles_and_fleet_permission.py and
+services/rbac.py). require_permission()'s shape is ported from
+PoultryOS-CBP's core/permissions.py so a future phase can keep growing a
+real per-resource catalog without changing how routes are gated."""
 from fastapi import Depends, HTTPException, status
 
 from app.core.casbin_enforcer import get_enforcer
@@ -12,15 +15,13 @@ from app.models import User
 
 DEFAULT_DOMAIN = "default"
 
-# Every staff-facing route in Phase 1 (deployments, tickets, maintenance)
-# gates on this one permission. register.py / ingest.py / the hub_integration
-# equivalent on the deployment side are NOT Casbin-gated at all — they're
-# machine-to-machine, authenticated by a shared secret instead (see
-# core/deps.py's verify_deployment_action_key... actually that check lives
-# on the DEPLOYMENT side; here, api/routers/ingest.py verifies the
-# deployment's api_key_hash directly against the Deployment row, no Casbin
-# involved).
-STAFF_MANAGE = ("staff", "manage")
+# register.py / ingest.py / the hub_integration equivalent on the
+# deployment side are NOT Casbin-gated at all — they're machine-to-machine,
+# authenticated by a shared secret instead (api/routers/ingest.py verifies
+# the deployment's api_key_hash directly against the Deployment row, no
+# Casbin involved).
+STAFF_MANAGE = ("staff", "manage")  # users.py — admin only
+FLEET_MANAGE = ("fleet", "manage")  # deployments/tickets/maintenance — admin + engineer
 
 
 async def has_permission(user_id: str, resource: str, action: str) -> bool:

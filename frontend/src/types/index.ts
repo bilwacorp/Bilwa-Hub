@@ -95,3 +95,22 @@ export interface MaintenanceWindowListResponse {
   total: number
   items: MaintenanceWindow[]
 }
+
+// admin: full access, incl. managing other staff accounts.
+// engineer: fleet access (deployments/tickets/maintenance) but not staff management.
+export type StaffRole = 'admin' | 'engineer'
+
+export interface StaffUser {
+  id: string
+  username: string
+  full_name: string | null
+  email: string | null
+  is_active: boolean
+  role: StaffRole | null
+  created_at: string
+}
+
+export interface StaffUserListResponse {
+  total: number
+  items: StaffUser[]
+}

@@ -98,7 +98,10 @@ troubleshooting, the credential model): **`docs/CONNECTING_A_DEPLOYMENT.md`**
 
 ## What's deliberately NOT in Phase 1
 
-- No permission catalog / roles UI on the hub — one hardcoded `admin` role.
+- Staff user management + two hardcoded roles (`admin`, `engineer`) exist
+  (see `CLAUDE.md`'s "The permission model"), but there's still no general
+  permission *catalog*/roles UI — what each role grants isn't
+  admin-configurable, just those two fixed sets of permissions.
 - No per-device session management (no `UserSession`/"sid" claim) — just
   `token_version`-based revocation on password change.
 - No local ticket table on the PoultryOS-CBP side — tickets are relayed

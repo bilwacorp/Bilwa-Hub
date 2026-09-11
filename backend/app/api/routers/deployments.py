@@ -1,6 +1,6 @@
 """Staff-facing deployment registry + inbound-action triggers. Every route
-requires STAFF_MANAGE (see core/permissions.py — Phase 1 has just the one
-role/permission)."""
+requires FLEET_MANAGE (see core/permissions.py — granted to both 'admin'
+and 'engineer')."""
 import hashlib
 import secrets
 from datetime import datetime
@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.permissions import STAFF_MANAGE, require_permission
+from app.core.permissions import FLEET_MANAGE, require_permission
 from app.db.session import get_db
 from app.models import Deployment, DeploymentSnapshot, DeploymentStatus, MaintenanceWindow, User
 from app.schemas import (
@@ -21,7 +21,7 @@ from app.schemas import (
 from app.services import deployment_client
 from app.services.maintenance_query import currently_active_windows
 
-router = APIRouter(prefix="/deployments", tags=["deployments"], dependencies=[Depends(require_permission(*STAFF_MANAGE))])
+router = APIRouter(prefix="/deployments", tags=["deployments"], dependencies=[Depends(require_permission(*FLEET_MANAGE))])
 
 
 async def _latest_snapshot(db: AsyncSession, deployment_id) -> DeploymentSnapshot | None:

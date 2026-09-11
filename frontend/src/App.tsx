@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes, Link, useLocation } from 'react-router-dom'
-import { LayoutGrid, Ticket, CalendarClock, LogOut } from 'lucide-react'
+import { LayoutGrid, Ticket, CalendarClock, LogOut, Users } from 'lucide-react'
 import { useAuthStore } from './stores/auth'
 import api from './lib/api'
 import LoginPage from './pages/auth/LoginPage'
@@ -7,6 +7,7 @@ import DeploymentsListPage from './pages/deployments/DeploymentsListPage'
 import DeploymentDetailPage from './pages/deployments/DeploymentDetailPage'
 import SupportTicketsPage from './pages/tickets/SupportTicketsPage'
 import MaintenanceWindowsPage from './pages/maintenance/MaintenanceWindowsPage'
+import StaffUsersPage from './pages/users/StaffUsersPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -14,13 +15,21 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function RequireAdmin({ children }: { children: React.ReactNode }) {
+  const role = useAuthStore((s) => s.user?.role)
+  if (role !== 'admin') return <Navigate to="/deployments" replace />
+  return <>{children}</>
+}
+
 function Shell({ children }: { children: React.ReactNode }) {
   const location = useLocation()
   const clearAuth = useAuthStore((s) => s.clearAuth)
+  const role = useAuthStore((s) => s.user?.role)
   const navItems = [
     { to: '/deployments', label: 'Deployments', icon: LayoutGrid },
     { to: '/tickets', label: 'Support Tickets', icon: Ticket },
     { to: '/maintenance-windows', label: 'Maintenance', icon: CalendarClock },
+    ...(role === 'admin' ? [{ to: '/users', label: 'Staff', icon: Users }] : []),
   ]
   return (
     <div className="min-h-screen flex">
@@ -57,6 +66,7 @@ export default function App() {
       <Route path="/deployments/:deploymentId" element={<RequireAuth><Shell><DeploymentDetailPage /></Shell></RequireAuth>} />
       <Route path="/tickets" element={<RequireAuth><Shell><SupportTicketsPage /></Shell></RequireAuth>} />
       <Route path="/maintenance-windows" element={<RequireAuth><Shell><MaintenanceWindowsPage /></Shell></RequireAuth>} />
+      <Route path="/users" element={<RequireAuth><RequireAdmin><Shell><StaffUsersPage /></Shell></RequireAdmin></RequireAuth>} />
       <Route path="*" element={<Navigate to="/deployments" replace />} />
     </Routes>
   )

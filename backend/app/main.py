@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.core.casbin_enforcer import init_enforcer
 from app.core.casbin_watcher import start_watcher, stop_watcher
 from app.core.maintenance_scheduler import start_scheduler, stop_scheduler
-from app.api.routers import auth, register, ingest, deployments, tickets, maintenance
+from app.api.routers import auth, register, ingest, deployments, tickets, maintenance, users
 
 logging.basicConfig(level=settings.LOG_LEVEL)
 logger = logging.getLogger(__name__)
@@ -96,3 +96,4 @@ app.include_router(ingest.router, prefix=PREFIX)
 app.include_router(deployments.router, prefix=PREFIX)
 app.include_router(tickets.router, prefix=PREFIX)
 app.include_router(maintenance.router, prefix=PREFIX)
+app.include_router(users.router, prefix=PREFIX)

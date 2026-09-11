@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
-from app.core.permissions import STAFF_MANAGE, require_permission
+from app.core.permissions import FLEET_MANAGE, require_permission
 from app.db.session import get_db
 from app.models import MaintenanceWindow, MaintenanceWindowStatus, User
 from app.schemas import (
@@ -18,7 +18,7 @@ from app.services.maintenance_push import clear_reminders, sync_window
 
 router = APIRouter(
     prefix="/maintenance-windows", tags=["maintenance"],
-    dependencies=[Depends(require_permission(*STAFF_MANAGE))],
+    dependencies=[Depends(require_permission(*FLEET_MANAGE))],
 )
 
 

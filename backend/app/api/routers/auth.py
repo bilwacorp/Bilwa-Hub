@@ -15,6 +15,7 @@ from app.core.security import (
 from app.db.session import get_db
 from app.models import User
 from app.schemas import LoginRequest, TokenResponse, UserOut
+from app.services import rbac
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -66,4 +67,6 @@ async def logout(response: Response):
 
 @router.get("/me", response_model=UserOut)
 async def me(current_user: User = Depends(get_current_user)):
-    return UserOut.model_validate(current_user)
+    out = UserOut.model_validate(current_user)
+    out.role = await rbac.get_role(str(current_user.id))
+    return out
