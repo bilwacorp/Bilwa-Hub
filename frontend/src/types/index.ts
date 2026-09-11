@@ -74,6 +74,12 @@ export interface SupportTicketListResponse {
   items: SupportTicket[]
 }
 
+// How hard an active window bites — escalating:
+//   banner    → in-app notice only
+//   read_only → deployment 503s all writes
+//   lockout   → read_only + new sign-ins refused
+export type MaintenanceMode = 'banner' | 'read_only' | 'lockout'
+
 export interface MaintenanceWindow {
   id: string
   deployment_id: string | null
@@ -81,7 +87,7 @@ export interface MaintenanceWindow {
   scheduled_end: string
   description: string
   status: MaintenanceWindowStatus
-  read_only: boolean
+  mode: MaintenanceMode
   created_at: string
 }
 

@@ -135,11 +135,15 @@ class MaintenanceWindow(Base):
     scheduled_end: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[MaintenanceWindowStatus] = mapped_column(Enum(MaintenanceWindowStatus), default=MaintenanceWindowStatus.planned, nullable=False)
-    # Opt-in: while an active window with this set is in force, the
-    # deployment returns 503 for mutating requests (its
-    # maintenance_gate_middleware). Default off — a window is just a banner
-    # unless someone deliberately ticks this.
-    read_only: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # How hard the window bites while it's active, opt-in and escalating:
+    #   "banner"    — just an in-app notice, nothing blocked (default).
+    #   "read_only" — the deployment returns 503 for mutating requests
+    #                 (its maintenance_gate_middleware); viewing still works.
+    #   "lockout"   — read_only PLUS new sign-ins are refused; existing
+    #                 sessions keep working (read-only) until they expire.
+    # Stored as a plain string, not a DB enum, so adding a level later is a
+    # code change only.
+    mode: Mapped[str] = mapped_column(String(16), default="banner", nullable=False)
     # Per-deployment push bookkeeping so a fleet-wide window can be
     # pushed/retried to each deployment independently. Shape:
     #   { "<deployment_uuid>": {

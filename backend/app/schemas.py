@@ -6,6 +6,12 @@ from pydantic import BaseModel, field_serializer, field_validator
 
 from app.models import DeploymentStatus, MaintenanceWindowStatus, SupportTicketStatus
 
+# How hard an active maintenance window bites (MaintenanceWindow.mode):
+#   banner    — in-app notice only
+#   read_only — deployment 503s mutating requests
+#   lockout   — read_only + new sign-ins refused
+MaintenanceMode = Literal["banner", "read_only", "lockout"]
+
 
 def _to_naive_utc(dt: datetime) -> datetime:
     """Every datetime column here is naive UTC. The frontend sends
@@ -102,7 +108,7 @@ class MaintenanceWindowPublic(BaseModel):
     scheduled_end: datetime
     description: str
     status: MaintenanceWindowStatus
-    read_only: bool
+    mode: MaintenanceMode
 
     model_config = {"from_attributes": True}
 
@@ -249,7 +255,7 @@ class MaintenanceWindowCreate(BaseModel):
     scheduled_start: datetime
     scheduled_end: datetime
     description: str
-    read_only: bool = False
+    mode: MaintenanceMode = "banner"
 
     @field_validator("scheduled_start", "scheduled_end")
     @classmethod
@@ -262,7 +268,7 @@ class MaintenanceWindowUpdate(BaseModel):
     scheduled_end: Optional[datetime] = None
     description: Optional[str] = None
     status: Optional[MaintenanceWindowStatus] = None
-    read_only: Optional[bool] = None
+    mode: Optional[MaintenanceMode] = None
 
     @field_validator("scheduled_start", "scheduled_end")
     @classmethod
@@ -277,7 +283,7 @@ class MaintenanceWindowOut(BaseModel):
     scheduled_end: datetime
     description: str
     status: MaintenanceWindowStatus
-    read_only: bool
+    mode: MaintenanceMode
     created_at: datetime
 
     model_config = {"from_attributes": True}

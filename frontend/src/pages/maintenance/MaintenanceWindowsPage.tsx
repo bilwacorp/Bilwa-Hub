@@ -12,7 +12,7 @@ import { Input } from '../../components/ui/Input'
 import { Select } from '../../components/ui/Select'
 import { Button } from '../../components/ui/Button'
 import type {
-  Deployment, DeploymentListResponse,
+  Deployment, DeploymentListResponse, MaintenanceMode,
   MaintenanceWindow, MaintenanceWindowListResponse, MaintenanceWindowStatus,
 } from '../../types'
 
@@ -23,12 +23,24 @@ const STATUS_VARIANT: Record<MaintenanceWindowStatus, 'blue' | 'amber' | 'green'
   cancelled: 'gray',
 }
 
+const MODE_OPTIONS: { value: MaintenanceMode; label: string; hint: string }[] = [
+  { value: 'banner', label: 'Banner only', hint: 'Just an in-app heads-up. Nothing is blocked.' },
+  { value: 'read_only', label: 'Read-only', hint: 'Blocks all writes on the deployment (503) while active. Viewing still works.' },
+  { value: 'lockout', label: 'Lockout (block sign-in)', hint: 'Read-only PLUS new sign-ins are refused. Existing sessions keep working until they expire.' },
+]
+
+const MODE_BADGE: Record<MaintenanceMode, { variant: 'gray' | 'amber' | 'red'; label: string }> = {
+  banner: { variant: 'gray', label: 'Banner only' },
+  read_only: { variant: 'amber', label: 'Read-only' },
+  lockout: { variant: 'red', label: 'Lockout' },
+}
+
 type NewWindowForm = {
   deployment_id: string
   scheduled_start: string
   scheduled_end: string
   description: string
-  read_only: boolean
+  mode: MaintenanceMode
 }
 
 export default function MaintenanceWindowsPage() {
@@ -46,7 +58,7 @@ export default function MaintenanceWindowsPage() {
     id ? (deployments?.items.find((d) => d.id === id)?.client_name ?? 'Single deployment') : 'Fleet-wide'
 
   const [showCreate, setShowCreate] = useState(false)
-  const form = useForm<NewWindowForm>({ defaultValues: { read_only: false, deployment_id: '' } })
+  const form = useForm<NewWindowForm>({ defaultValues: { mode: 'banner', deployment_id: '' } })
   const createMutation = useMutation({
     // datetime-local gives a naive *local* string; the backend stores naive
     // UTC — convert here so a window scheduled for "14:00" means 14:00 the
@@ -54,11 +66,11 @@ export default function MaintenanceWindowsPage() {
     mutationFn: (v: NewWindowForm) => api.post('/maintenance-windows', {
       deployment_id: v.deployment_id || null,
       description: v.description,
-      read_only: v.read_only,
+      mode: v.mode,
       scheduled_start: new Date(v.scheduled_start).toISOString(),
       scheduled_end: new Date(v.scheduled_end).toISOString(),
     }),
-    onSuccess: () => { toast.success('Maintenance window created'); setShowCreate(false); form.reset({ read_only: false, deployment_id: '' }); qc.invalidateQueries({ queryKey: ['maintenance-windows'] }) },
+    onSuccess: () => { toast.success('Maintenance window created'); setShowCreate(false); form.reset({ mode: 'banner', deployment_id: '' }); qc.invalidateQueries({ queryKey: ['maintenance-windows'] }) },
     onError: () => toast.error('Failed to create maintenance window'),
   })
 
@@ -73,7 +85,10 @@ export default function MaintenanceWindowsPage() {
     { key: 'scheduled_end', header: 'End', render: (w) => formatDate(w.scheduled_end) },
     { key: 'description', header: 'Description' },
     { key: 'scope', header: 'Scope', render: (w) => deploymentName(w.deployment_id) },
-    { key: 'read_only', header: 'Mode', render: (w) => w.read_only ? <Badge variant="red">Read-only</Badge> : <span className="text-muted text-xs">Banner only</span> },
+    { key: 'mode', header: 'Mode', render: (w) => {
+      const b = MODE_BADGE[w.mode] ?? MODE_BADGE.banner
+      return <Badge variant={b.variant}>{b.label}</Badge>
+    } },
     { key: 'status', header: 'Status', render: (w) => <Badge variant={STATUS_VARIANT[w.status]}>{w.status.replace('_', ' ')}</Badge> },
     {
       key: 'actions', header: '', className: 'text-right',
@@ -114,17 +129,17 @@ export default function MaintenanceWindowsPage() {
           <Input type="datetime-local" label="Start" {...form.register('scheduled_start', { required: true })} />
           <Input type="datetime-local" label="End" {...form.register('scheduled_end', { required: true })} />
           <Input label="Description" placeholder="e.g. Database upgrade" {...form.register('description', { required: true })} />
-          <label className="flex items-start gap-2 text-sm text-text">
-            <input type="checkbox" className="mt-0.5" {...form.register('read_only')} />
-            <span>
-              Read-only mode
-              <span className="block text-xs text-muted">
-                Blocks all writes on the deployment (returns 503) while the window is active.
-                Leave off for a banner-only heads-up.
-              </span>
-            </span>
-          </label>
-          <p className="text-xs text-muted">Clients see an in-app banner immediately; their admins get an email once Phase 2 ships.</p>
+          <div>
+            <Select
+              label="Enforcement"
+              options={MODE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+              {...form.register('mode')}
+            />
+            <p className="mt-1 text-xs text-muted">
+              {MODE_OPTIONS.find((o) => o.value === form.watch('mode'))?.hint}
+            </p>
+          </div>
+          <p className="text-xs text-muted">Clients see an in-app banner immediately; their admins also get an email.</p>
         </form>
       </Modal>
     </div>
