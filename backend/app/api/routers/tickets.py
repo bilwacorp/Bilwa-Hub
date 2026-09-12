@@ -1,11 +1,16 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import FLEET_MANAGE, require_permission
 from app.db.session import get_db
-from app.models import SupportTicket, SupportTicketStatus
+from app.models import Deployment, SupportTicket, SupportTicketStatus
 from app.schemas import SupportTicketListResponse, SupportTicketOut, SupportTicketUpdate
+from app.services import deployment_client
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tickets", tags=["tickets"], dependencies=[Depends(require_permission(*FLEET_MANAGE))])
 
@@ -49,4 +54,19 @@ async def update_ticket(ticket_id: str, body: SupportTicketUpdate, db: AsyncSess
     if body.status in (SupportTicketStatus.resolved, SupportTicketStatus.closed) and t.resolved_at is None:
         t.resolved_at = datetime.utcnow()
     await db.flush()
+
+    # Best-effort: tell the deployment so it can show the new status back to
+    # the client admin who raised it. Never fails the staff-facing request —
+    # same "hub outage/deployment outage must never block the other side"
+    # convention as every other cross-service call here.
+    deployment = (await db.execute(select(Deployment).where(Deployment.id == t.deployment_id))).scalar_one_or_none()
+    if deployment:
+        try:
+            await deployment_client.push_ticket_status(
+                deployment, hub_ticket_id=str(t.id), status=t.status.value,
+                resolved_at=t.resolved_at.isoformat() if t.resolved_at else None,
+            )
+        except deployment_client.DeploymentCallError:
+            logger.warning("tickets.update_ticket: push to deployment %s failed", deployment.id, exc_info=True)
+
     return SupportTicketOut.model_validate(t)

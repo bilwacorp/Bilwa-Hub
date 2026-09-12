@@ -74,3 +74,17 @@ async def push_maintenance(deployment: Deployment, *, windows: list[dict], notif
     that one window. Matches PoultryOS-CBP's api/v1/routers/hub_integration
     .py POST /hub/maintenance."""
     return await _call(deployment, "POST", "/maintenance", {"maintenance": windows, "notify": notify})
+
+
+async def push_ticket_status(
+    deployment: Deployment, *, hub_ticket_id: str, status: str, resolved_at: Optional[str] = None,
+) -> dict:
+    """Tells the deployment a ticket it relayed to us has changed status, so
+    it can show that back to the client admin who raised it. Matches
+    PoultryOS-CBP's api/v1/routers/hub_integration.py POST
+    /hub/support-tickets/{hub_ticket_id}/status. Looked up by the ticket's
+    hub-assigned id, since the deployment doesn't know our internal one."""
+    return await _call(
+        deployment, "POST", f"/support-tickets/{hub_ticket_id}/status",
+        {"status": status, "resolved_at": resolved_at},
+    )
