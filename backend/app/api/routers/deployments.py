@@ -154,6 +154,18 @@ async def action_extend_expiry(deployment_id: str, body: ExtendExpiryActionReque
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
 
 
+@router.post("/{deployment_id}/actions/check-health")
+async def action_check_health(deployment_id: str, db: AsyncSession = Depends(get_db)):
+    """Live on-demand probe — see deployment_client.check_health's docstring
+    for how this differs from the passive, heartbeat-derived `Health` dot
+    on the list/detail pages."""
+    d = await _get_or_404(db, deployment_id)
+    try:
+        return await deployment_client.check_health(d)
+    except deployment_client.DeploymentCallError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+
+
 @router.patch("/{deployment_id}/subscription-requests/{request_id}")
 async def review_subscription_request(
     deployment_id: str, request_id: str, body: SubscriptionRequestReviewAction, db: AsyncSession = Depends(get_db),

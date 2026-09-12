@@ -3,6 +3,8 @@ services/hub_client.py. Decrypts the target deployment's action_key and
 calls its /api/v1/hub/subscription/* endpoints (see that repo's
 api/v1/routers/hub_integration.py — these shapes are the ground truth this
 mirrors)."""
+import time
+from datetime import datetime
 from typing import Any, Optional
 
 import httpx
@@ -11,6 +13,11 @@ from app.models import Deployment
 from app.services import crypto
 
 _HTTP_TIMEOUT = 15.0
+# Shorter than _HTTP_TIMEOUT above — this backs an on-demand "Check now"
+# click a staff member is actively waiting on, not a background action; a
+# slow/hanging deployment should read as "unreachable" in a few seconds,
+# not leave the button spinning for 15.
+_HEALTH_CHECK_TIMEOUT = 6.0
 
 
 class DeploymentCallError(Exception):
@@ -88,3 +95,52 @@ async def push_ticket_status(
         deployment, "POST", f"/support-tickets/{hub_ticket_id}/status",
         {"status": status, "resolved_at": resolved_at},
     )
+
+
+async def check_health(deployment: Deployment) -> dict:
+    """On-demand live probe of the deployment's own public /api/health and
+    /api/health/db — the same endpoints its client-facing /health status
+    page polls (see PoultryOS-CBP's HealthStatusPage.tsx / main.py). Doesn't
+    go through _call(): these are unauthenticated (no X-Hub-Api-Key) and
+    live outside /api/v1/hub.
+
+    Independent of deployments.py's derived_status, which only reflects
+    heartbeat freshness (up to ~2h stale) — this is a live round trip for
+    the moment someone actually clicks "Check now", not a passive read of
+    the last heartbeat.
+
+    Never raises for an unreachable deployment or a failing check — that
+    outcome IS the answer being asked for, so it comes back as
+    api/database: False rather than a 502. Only raises DeploymentCallError
+    when there's no base_url on file to even attempt."""
+    if not deployment.base_url:
+        raise DeploymentCallError("Deployment has no base_url on file")
+
+    base = deployment.base_url.rstrip("/")
+    result: dict[str, Any] = {
+        "api": False, "database": False,
+        "api_latency_ms": None, "db_latency_ms": None,
+        "checked_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+    async with httpx.AsyncClient(timeout=_HEALTH_CHECK_TIMEOUT) as client:
+        t0 = time.monotonic()
+        try:
+            resp = await client.get(f"{base}/api/health")
+            if resp.status_code == 200:
+                result["api"] = True
+                result["api_latency_ms"] = round((time.monotonic() - t0) * 1000)
+        except httpx.HTTPError:
+            pass
+
+        t0 = time.monotonic()
+        try:
+            resp = await client.get(f"{base}/api/health/db")
+            if resp.status_code == 200:
+                data = resp.json()
+                result["database"] = bool(data.get("database"))
+                result["db_latency_ms"] = data.get("db_latency_ms")
+        except httpx.HTTPError:
+            pass
+
+    return result
