@@ -69,7 +69,22 @@ export default function StaffUsersPage() {
   const columns: Column<StaffUser>[] = [
     { key: 'username', header: 'Username' },
     { key: 'full_name', header: 'Full name', render: (u) => u.full_name ?? '—' },
-    { key: 'email', header: 'Email', render: (u) => u.email ?? '—' },
+    {
+      key: 'email', header: 'Email',
+      render: (u) => (
+        <Input
+          className="h-8 text-xs w-44"
+          type="email"
+          defaultValue={u.email ?? ''}
+          placeholder="name@example.com"
+          disabled={patchMutation.isPending}
+          onBlur={(e) => {
+            const v = e.target.value.trim()
+            if (v !== (u.email ?? '')) patchMutation.mutate({ id: u.id, body: { email: v || null } })
+          }}
+        />
+      ),
+    },
     {
       key: 'phone', header: 'Phone (WhatsApp)',
       render: (u) => (
