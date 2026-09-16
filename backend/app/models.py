@@ -65,6 +65,15 @@ class Deployment(Base):
     api_key_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     action_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # The expiry_date value (from the latest DeploymentSnapshot) an
+    # "expiring soon" alert has already been sent for — see
+    # core/expiry_reminder_scheduler.py. NULL = never sent. Compared by
+    # value, not just presence, so a renewal that pushes expiry_date
+    # forward (reflected on the next heartbeat) naturally makes this stale
+    # and lets a future reminder fire again for the new date, with no
+    # explicit reset needed.
+    expiry_reminder_sent_for: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     snapshots: Mapped[list["DeploymentSnapshot"]] = relationship(

@@ -1,0 +1,4 @@
+{{ company_name }}: {{ client_name }}'s subscription expires on {{ expiry_date }} ({{ days_left }} day{{ 's' if days_left != 1 else '' }} from now).
+{% if deployment_url %}
+View: {{ deployment_url }}
+{% endif %}

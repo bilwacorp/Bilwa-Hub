@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Subscription expiring soon{% endblock %}
+{% block content %}
+<h1 style="margin:0 0 16px; font-size:20px; color:#16213E;">Subscription expiring soon</h1>
+<p style="margin:0 0 16px; font-size:15px; line-height:1.6;">
+  <strong>{{ client_name }}</strong>'s subscription expires on <strong>{{ expiry_date }}</strong>
+  ({{ days_left }} day{{ 's' if days_left != 1 else '' }} from now) and doesn't appear to have been
+  renewed yet.
+</p>
+{% if deployment_url %}
+<table role="presentation" cellpadding="0" cellspacing="0">
+  <tr>
+    <td style="border-radius:6px; background-color:#16213E;">
+      <a href="{{ deployment_url }}" style="display:inline-block; padding:12px 24px; font-size:14px; font-weight:600; color:#FFFFFF; text-decoration:none;">View deployment</a>
+    </td>
+  </tr>
+</table>
+{% endif %}
+{% endblock %}

@@ -149,11 +149,15 @@ services/notifications/ Email (SMTP) + WhatsApp (generic HTTP gateway) staff ale
                       thread. No DB-editable templates here (unlike PoultryPro-CBF) —
                       templates/ + templates_whatsapp/ are file-based only.
 services/notification_triggers.py
-                      Where the two Phase-2 events are wired in: a support ticket raised
-                      (ingest.py's ingest_support_ticket) and a subscription renewal/upgrade
+                      Where three fleet events are wired in: a support ticket raised
+                      (ingest.py's ingest_support_ticket), a subscription renewal/upgrade
                       request raised (ingest.py's ingest_heartbeat — pending_requests arrives
                       as the deployment's full current list every heartbeat, so this diffs
-                      against the prior snapshot to find genuinely new requests). Fans out via
+                      against the prior snapshot to find genuinely new requests), and a
+                      subscription about to expire (core/expiry_reminder_scheduler.py's
+                      hourly poll loop — not an inbound event, so the hub has to check for
+                      it itself; idempotent per exact expiry_date via
+                      Deployment.expiry_reminder_sent_for). All three fan out via
                       recipients.recipients_for_deployment() — a deployment's explicitly
                       assigned staff (DeploymentStaffAssignment) if any, else every active
                       FLEET_MANAGE holder — to whichever of email/WhatsApp each recipient has

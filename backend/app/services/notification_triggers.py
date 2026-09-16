@@ -1,15 +1,16 @@
-"""Where the two Phase-2 fleet events are wired into services/notifications/
-— called from api/routers/ingest.py. Kept out of ingest.py itself so that
-router stays focused on parsing/persisting the inbound payload; see
+"""Where the fleet events are wired into services/notifications/ — two
+called from api/routers/ingest.py, one from core/expiry_reminder_scheduler.py.
+Kept out of those call sites so they stay focused on their own job; see
 services/notifications/README.md's "Triggers" section for the full picture.
 
-Both fan out via recipients_for_deployment() — the deployment's explicitly
-assigned staff (api/routers/deployments.py's PUT .../staff) if any,
-otherwise every FLEET_MANAGE holder. One email per recipient with an email
-on file, one WhatsApp message per recipient with a phone on file. A
+All three fan out via recipients_for_deployment() — the deployment's
+explicitly assigned staff (api/routers/deployments.py's PUT .../staff) if
+any, otherwise every FLEET_MANAGE holder. One email per recipient with an
+email on file, one WhatsApp message per recipient with a phone on file. A
 recipient with neither is simply skipped for both (same "never block the
 caller" posture as a missing address anywhere else in this package)."""
 import logging
+from datetime import date
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -104,6 +105,42 @@ async def notify_subscription_request_raised(
                 )
             except Exception:
                 logger.warning("Failed to queue subscription-request WhatsApp message to %s", user.phone, exc_info=True)
+
+
+async def notify_subscription_expiring(db: AsyncSession, deployment: Deployment, expiry_date: date, days_left: int) -> None:
+    """Called from core/expiry_reminder_scheduler.py once per deployment
+    entering its expiry-reminder window — that scheduler owns the
+    idempotency check (Deployment.expiry_reminder_sent_for), this function
+    just sends."""
+    recipients = await recipients_for_deployment(db, deployment.id)
+    if not recipients:
+        return
+    service = NotificationService(db)
+    url = _deployment_url(deployment.id)
+    expiry_str = expiry_date.isoformat()
+    for user in recipients:
+        if user.email:
+            try:
+                await service.send_subscription_expiring_alert(
+                    recipient=user.email,
+                    client_name=deployment.client_name,
+                    expiry_date=expiry_str,
+                    days_left=days_left,
+                    deployment_url=url,
+                )
+            except Exception:
+                logger.warning("Failed to queue subscription-expiring email to %s", user.email, exc_info=True)
+        if user.phone:
+            try:
+                await service.send_subscription_expiring_whatsapp(
+                    recipient=user.phone,
+                    client_name=deployment.client_name,
+                    expiry_date=expiry_str,
+                    days_left=days_left,
+                    deployment_url=url,
+                )
+            except Exception:
+                logger.warning("Failed to queue subscription-expiring WhatsApp message to %s", user.phone, exc_info=True)
 
 
 def new_pending_requests(

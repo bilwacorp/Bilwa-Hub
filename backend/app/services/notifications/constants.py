@@ -11,6 +11,7 @@ DEFAULT_WHATSAPP_PROVIDER = "whatsapp"
 # add a future alert type. See README.md's "Adding a new template" section.
 TEMPLATE_SUPPORT_TICKET_RAISED = "support_ticket_raised"
 TEMPLATE_SUBSCRIPTION_REQUEST_RAISED = "subscription_request_raised"
+TEMPLATE_SUBSCRIPTION_EXPIRING = "subscription_expiring"
 
 # The shared header/footer wrapper every email template extends via
 # {% extends "base.html" %} — never sent standalone, only reachable through

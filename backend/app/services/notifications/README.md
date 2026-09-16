@@ -30,8 +30,8 @@ Business code should only ever import `NotificationService` (via the
 
 ## Triggers
 
-`app/services/notification_triggers.py` is where the two Phase-2 events are
-wired to this package:
+`app/services/notification_triggers.py` is where the fleet events are wired
+to this package:
 
 - `notify_support_ticket_raised` — called from
   `api/routers/ingest.py`'s `ingest_support_ticket`, right after the
@@ -42,8 +42,19 @@ wired to this package:
   incoming list's request `id`s against the immediately-preceding snapshot's
   to find ones that are genuinely new, so an unchanged pending request
   doesn't re-notify every 2 hours.
+- `notify_subscription_expiring` — called from
+  `core/expiry_reminder_scheduler.py`, a background poll loop (not an
+  inbound event — nothing pushes "about to expire", so the hub checks for
+  it) that wakes hourly and fires a one-time alert once a deployment's
+  latest-known `expiry_date` falls within `EXPIRY_REMINDER_DAYS_BEFORE`
+  days (default 7). Idempotent per exact `expiry_date` value
+  (`Deployment.expiry_reminder_sent_for`) — never nags every tick, and a
+  renewal that changes `expiry_date` (reflected on the deployment's next
+  heartbeat) makes a fresh reminder eligible again automatically. Doesn't
+  fire for a deployment that's already past its expiry with no future date
+  on file — that's a distinct "already expired" case this doesn't cover.
 
-Both fan out via `recipients_for_deployment()` (`recipients.py`): the staff
+All three fan out via `recipients_for_deployment()` (`recipients.py`): the staff
 explicitly assigned to that deployment (Deployments → a deployment →
 "Assigned Staff", `DeploymentStaffAssignment` / `PUT /deployments/{id}/staff`)
 if any, otherwise every active `fleet_staff()` holder (everyone with

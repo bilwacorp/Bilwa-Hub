@@ -23,6 +23,7 @@ from app.services.notifications.constants import (
     DEFAULT_PROVIDER,
     DEFAULT_WHATSAPP_PROVIDER,
     SENSITIVE_CONTEXT_KEYS,
+    TEMPLATE_SUBSCRIPTION_EXPIRING,
     TEMPLATE_SUBSCRIPTION_REQUEST_RAISED,
     TEMPLATE_SUPPORT_TICKET_RAISED,
 )
@@ -250,6 +251,35 @@ class NotificationService:
                 "client_name": client_name,
                 "request_type": request_type,
                 "requested_plan_name": requested_plan_name,
+                "deployment_url": deployment_url,
+            },
+        )
+
+    async def send_subscription_expiring_alert(
+        self, *, recipient: str, client_name: str, expiry_date: str, days_left: int, deployment_url: Optional[str] = None,
+    ) -> NotificationLog:
+        return await self.send_template(
+            recipient=recipient,
+            template=TEMPLATE_SUBSCRIPTION_EXPIRING,
+            context={
+                "client_name": client_name,
+                "expiry_date": expiry_date,
+                "days_left": days_left,
+                "deployment_url": deployment_url,
+            },
+            subject=f"[{client_name}] Subscription expires in {days_left} day{'s' if days_left != 1 else ''}",
+        )
+
+    async def send_subscription_expiring_whatsapp(
+        self, *, recipient: str, client_name: str, expiry_date: str, days_left: int, deployment_url: Optional[str] = None,
+    ) -> NotificationLog:
+        return await self.send_whatsapp_template(
+            recipient=recipient,
+            template=TEMPLATE_SUBSCRIPTION_EXPIRING,
+            context={
+                "client_name": client_name,
+                "expiry_date": expiry_date,
+                "days_left": days_left,
                 "deployment_url": deployment_url,
             },
         )

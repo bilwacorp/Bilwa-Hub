@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     HEARTBEAT_STALE_HOURS: int = 4
     HEARTBEAT_OFFLINE_HOURS: int = 8
 
+    # ── expiry reminders (core/expiry_reminder_scheduler.py) ───────────────
+    # A deployment whose latest-known expiry_date falls within this many
+    # days gets a one-time "expiring soon" email/WhatsApp alert (idempotent
+    # per exact expiry_date via Deployment.expiry_reminder_sent_for).
+    EXPIRY_REMINDER_DAYS_BEFORE: int = 7
+    # Days-out windows don't need 5-min granularity like maintenance
+    # windows do — hourly is plenty and keeps the poll loop cheap.
+    EXPIRY_REMINDER_SCHEDULER_INTERVAL_SECONDS: int = 3600
+
     # ── notifications (services/notifications/) ────────────────────────────
     # Celery broker/backend — a dedicated Redis DB index (1), separate from
     # nothing else in this app today (REDIS_URL/index 0 is the Casbin
