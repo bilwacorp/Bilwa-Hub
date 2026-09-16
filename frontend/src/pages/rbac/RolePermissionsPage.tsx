@@ -2,17 +2,13 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import axios from 'axios'
 import { ArrowLeft } from 'lucide-react'
 import api from '../../lib/api'
+import { errorMessage as errorDetail } from '../../lib/utils'
 import { Card } from '../../components/ui/Card'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
 import type { Permission, Role } from '../../types'
-
-function errorDetail(e: unknown): string | undefined {
-  return axios.isAxiosError(e) ? (e.response?.data as { detail?: string })?.detail : undefined
-}
 
 export default function RolePermissionsPage() {
   const { roleId } = useParams<{ roleId: string }>()
@@ -46,7 +42,7 @@ export default function RolePermissionsPage() {
       toast.success('Permissions updated')
       qc.invalidateQueries({ queryKey: ['role-permissions', roleId] })
     },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to update permissions'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to update permissions')),
   })
 
   const grantedSorted = (granted ?? []).slice().sort()

@@ -1,10 +1,9 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import axios from 'axios'
 import { Check, X } from 'lucide-react'
 import api from '../../lib/api'
-import { formatDate } from '../../lib/utils'
+import { formatDate, errorMessage as errorDetail } from '../../lib/utils'
 import { useAuthStore } from '../../stores/auth'
 import { Card } from '../../components/ui/Card'
 import { Badge } from '../../components/ui/Badge'
@@ -12,10 +11,6 @@ import { Modal } from '../../components/ui/Modal'
 import { Button } from '../../components/ui/Button'
 import { Tabs } from '../../components/ui/Tabs'
 import type { WorkflowTask } from '../../types'
-
-function errorDetail(e: unknown): string | undefined {
-  return axios.isAxiosError(e) ? (e.response?.data as { detail?: string })?.detail : undefined
-}
 
 function statusBadge(status: WorkflowTask['status']) {
   const variant = status === 'approved' ? 'green' : status === 'rejected' ? 'red' : status === 'pending' ? 'amber' : 'gray'
@@ -63,7 +58,7 @@ export default function MyApprovalsPage() {
       qc.invalidateQueries({ queryKey: ['my-tasks'] })
       qc.invalidateQueries({ queryKey: ['all-tasks'] })
     },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to act on this task'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to act on this task')),
   })
 
   return (

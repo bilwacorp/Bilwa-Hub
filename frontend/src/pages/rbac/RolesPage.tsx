@@ -3,10 +3,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import axios from 'axios'
 import { Plus, ShieldCheck, Trash2 } from 'lucide-react'
 import api from '../../lib/api'
-import { formatDate } from '../../lib/utils'
+import { formatDate, errorMessage as errorDetail } from '../../lib/utils'
 import { DataTable, type Column } from '../../components/ui/DataTable'
 import { Badge } from '../../components/ui/Badge'
 import { Modal } from '../../components/ui/Modal'
@@ -15,10 +14,6 @@ import { Button } from '../../components/ui/Button'
 import type { Role } from '../../types'
 
 type NewRoleForm = { name: string; description: string }
-
-function errorDetail(e: unknown): string | undefined {
-  return axios.isAxiosError(e) ? (e.response?.data as { detail?: string })?.detail : undefined
-}
 
 export default function RolesPage() {
   const navigate = useNavigate()
@@ -40,14 +35,14 @@ export default function RolesPage() {
       qc.invalidateQueries({ queryKey: ['roles'] })
       navigate(`/roles/${res.data.id}/permissions`)
     },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to create role'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to create role')),
   })
 
   const [deleteTarget, setDeleteTarget] = useState<Role | null>(null)
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/rbac/roles/${id}`),
     onSuccess: () => { toast.success('Role deleted'); setDeleteTarget(null); qc.invalidateQueries({ queryKey: ['roles'] }) },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to delete role'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to delete role')),
   })
 
   const columns: Column<Role>[] = [

@@ -2,10 +2,9 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
-import axios from 'axios'
 import { Plus, KeyRound } from 'lucide-react'
 import api from '../../lib/api'
-import { formatDate } from '../../lib/utils'
+import { formatDate, errorMessage as errorDetail } from '../../lib/utils'
 import { useAuthStore } from '../../stores/auth'
 import { DataTable, type Column } from '../../components/ui/DataTable'
 import { Badge } from '../../components/ui/Badge'
@@ -18,10 +17,6 @@ import type { Role, StaffUser, StaffUserListResponse } from '../../types'
 
 type NewStaffForm = { username: string; full_name: string; email: string; phone: string; password: string; role: string }
 type ResetPasswordForm = { new_password: string }
-
-function errorDetail(e: unknown): string | undefined {
-  return axios.isAxiosError(e) ? (e.response?.data as { detail?: string })?.detail : undefined
-}
 
 export default function StaffUsersPage() {
   const qc = useQueryClient()
@@ -53,13 +48,13 @@ export default function StaffUsersPage() {
       createForm.reset({ username: '', full_name: '', email: '', phone: '', password: '', role: '' })
       qc.invalidateQueries({ queryKey: ['staff-users'] })
     },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to create staff account'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to create staff account')),
   })
 
   const patchMutation = useMutation({
     mutationFn: ({ id, body }: { id: string; body: Record<string, unknown> }) => api.patch(`/users/${id}`, body),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['staff-users'] }) },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to update staff account'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to update staff account')),
   })
 
   const [resetTarget, setResetTarget] = useState<StaffUser | null>(null)
@@ -67,7 +62,7 @@ export default function StaffUsersPage() {
   const resetMutation = useMutation({
     mutationFn: ({ id, body }: { id: string; body: ResetPasswordForm }) => api.post(`/users/${id}/reset-password`, body),
     onSuccess: () => { toast.success('Password reset'); setResetTarget(null); resetForm.reset() },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to reset password'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to reset password')),
   })
 
   const columns: Column<StaffUser>[] = [

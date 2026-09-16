@@ -2,9 +2,9 @@ import { lazy, Suspense, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import axios from 'axios'
 import { Save, CheckCircle2, UploadCloud, Download, Upload, ArrowLeft } from 'lucide-react'
 import api from '../../lib/api'
+import { errorMessage as errorDetail } from '../../lib/utils'
 import { useAuthStore } from '../../stores/auth'
 import { Button } from '../../components/ui/Button'
 import { Badge } from '../../components/ui/Badge'
@@ -14,10 +14,6 @@ import type { BpmnDesignerHandle } from './designer/BpmnDesigner'
 // Code-split: bpmn-js's modeler + properties panel (with its CodeMirror
 // dependency) run to ~200KB gzipped — only worth loading on this one page.
 const BpmnDesigner = lazy(() => import('./designer/BpmnDesigner').then((m) => ({ default: m.BpmnDesigner })))
-
-function errorDetail(e: unknown): string | undefined {
-  return axios.isAxiosError(e) ? (e.response?.data as { detail?: string })?.detail : undefined
-}
 
 export default function WorkflowDesignerPage() {
   const { id, versionId } = useParams<{ id: string; versionId: string }>()
@@ -61,7 +57,7 @@ export default function WorkflowDesignerPage() {
       qc.invalidateQueries({ queryKey: ['workflow-version', id, versionId] })
       qc.invalidateQueries({ queryKey: ['workflow-versions', id] })
     },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to save'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to save')),
   })
 
   const validateMutation = useMutation({
@@ -83,7 +79,7 @@ export default function WorkflowDesignerPage() {
       qc.invalidateQueries({ queryKey: ['workflow-versions', id] })
       navigate(`/workflows/${id}`)
     },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to publish'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to publish')),
   })
 
   const handleExport = async () => {

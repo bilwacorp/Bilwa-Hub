@@ -1,10 +1,9 @@
 import { Link, useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import axios from 'axios'
 import { ArrowLeft, Plus, ExternalLink } from 'lucide-react'
 import api from '../../lib/api'
-import { formatDate } from '../../lib/utils'
+import { formatDate, errorMessage as errorDetail } from '../../lib/utils'
 import { useAuthStore } from '../../stores/auth'
 import { Card } from '../../components/ui/Card'
 import { Badge } from '../../components/ui/Badge'
@@ -12,10 +11,6 @@ import { Button } from '../../components/ui/Button'
 import { DataTable, type Column } from '../../components/ui/DataTable'
 import { buildBlankBpmn } from './designer/blankBpmn'
 import type { ApprovalRule, WorkflowDefinition, WorkflowVersionListItem } from '../../types'
-
-function errorDetail(e: unknown): string | undefined {
-  return axios.isAxiosError(e) ? (e.response?.data as { detail?: string })?.detail : undefined
-}
 
 export default function WorkflowDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -54,7 +49,7 @@ export default function WorkflowDetailPage() {
       qc.invalidateQueries({ queryKey: ['workflow-versions', id] })
       navigate(`/workflows/${id}/versions/${(res.data as { id: string }).id}`)
     },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to create a new version'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to create a new version')),
   })
 
   const columns: Column<WorkflowVersionListItem>[] = [

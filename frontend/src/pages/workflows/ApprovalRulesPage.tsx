@@ -2,9 +2,9 @@ import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import axios from 'axios'
 import { Plus, Trash2 } from 'lucide-react'
 import api from '../../lib/api'
+import { errorMessage as errorDetail } from '../../lib/utils'
 import { useAuthStore } from '../../stores/auth'
 import { DataTable, type Column } from '../../components/ui/DataTable'
 import { Badge } from '../../components/ui/Badge'
@@ -15,10 +15,6 @@ import { Button } from '../../components/ui/Button'
 import type {
   ApprovalRule, ApproverStrategy, RuleActionInput, RuleActionType, RuleConditionInput, WorkflowDefinition,
 } from '../../types'
-
-function errorDetail(e: unknown): string | undefined {
-  return axios.isAxiosError(e) ? (e.response?.data as { detail?: string })?.detail : undefined
-}
 
 const ACTION_TYPE_OPTIONS: { value: RuleActionType; label: string }[] = [
   { value: 'assign_approver', label: 'Assign approver' },
@@ -126,19 +122,19 @@ export default function ApprovalRulesPage() {
       qc.invalidateQueries({ queryKey: ['workflow-rules-all'] })
       qc.invalidateQueries({ queryKey: ['workflow-rules'] })
     },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to save rule'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to save rule')),
   })
 
   const toggleMutation = useMutation({
     mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) => api.patch(`/workflow-rules/${id}`, { is_active }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['workflow-rules-all'] }),
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to update rule'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to update rule')),
   })
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/workflow-rules/${id}`),
     onSuccess: () => { toast.success('Rule deleted'); qc.invalidateQueries({ queryKey: ['workflow-rules-all'] }) },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to delete rule (deactivate it instead if it has already routed a task)'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to delete rule (deactivate it instead if it has already routed a task)')),
   })
 
   const columns: Column<ApprovalRule>[] = [

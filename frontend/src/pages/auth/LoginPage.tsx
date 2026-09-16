@@ -2,8 +2,8 @@ import { useForm } from 'react-hook-form'
 import { useMutation } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import axios from 'axios'
 import api from '../../lib/api'
+import { errorMessage } from '../../lib/utils'
 import { useAuthStore } from '../../stores/auth'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
@@ -39,10 +39,7 @@ export default function LoginPage() {
       const landing = LANDING_PAGES.find((p) => permissions.includes(p.permission))
       navigate(landing?.path ?? '/deployments')
     },
-    onError: (e) => {
-      const detail = axios.isAxiosError(e) ? (e.response?.data as { detail?: string })?.detail : undefined
-      toast.error(detail || 'Login failed')
-    },
+    onError: (e) => toast.error(errorMessage(e, 'Login failed')),
   })
 
   return (

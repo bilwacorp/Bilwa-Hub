@@ -2,10 +2,9 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
-import axios from 'axios'
 import { RotateCw, Send, Trash2 } from 'lucide-react'
 import api from '../../lib/api'
-import { formatDate } from '../../lib/utils'
+import { formatDate, errorMessage as errorDetail } from '../../lib/utils'
 import { useAuthStore } from '../../stores/auth'
 import { DataTable, type Column } from '../../components/ui/DataTable'
 import { Badge } from '../../components/ui/Badge'
@@ -25,10 +24,6 @@ const STATUS_VARIANT: Record<NotificationStatus, 'amber' | 'blue' | 'green' | 'r
 
 type TestEmailForm = { recipient: string }
 type TestWhatsAppForm = { recipient: string; message: string }
-
-function errorDetail(e: unknown): string | undefined {
-  return axios.isAxiosError(e) ? (e.response?.data as { detail?: string })?.detail : undefined
-}
 
 export default function NotificationsPage() {
   const qc = useQueryClient()
@@ -54,7 +49,7 @@ export default function NotificationsPage() {
   const resendMutation = useMutation({
     mutationFn: (id: string) => api.post(`/notifications/resend/${id}`),
     onSuccess: () => { toast.success('Notification re-queued'); qc.invalidateQueries({ queryKey: ['notifications'] }) },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to resend'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to resend')),
   })
 
   const deleteMutation = useMutation({
@@ -73,7 +68,7 @@ export default function NotificationsPage() {
       testEmailForm.reset()
       qc.invalidateQueries({ queryKey: ['notifications'] })
     },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to send test email'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to send test email')),
   })
 
   const [showTestWhatsApp, setShowTestWhatsApp] = useState(false)
@@ -86,7 +81,7 @@ export default function NotificationsPage() {
       testWhatsAppForm.reset({ message: 'This is a test message from BilwaCorp Fleet Hub.' })
       qc.invalidateQueries({ queryKey: ['notifications'] })
     },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to send test WhatsApp message'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to send test WhatsApp message')),
   })
 
   const columns: Column<NotificationLog>[] = [

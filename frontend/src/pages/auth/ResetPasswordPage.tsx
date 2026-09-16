@@ -2,8 +2,8 @@ import { useForm } from 'react-hook-form'
 import { useMutation } from '@tanstack/react-query'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import axios from 'axios'
 import api from '../../lib/api'
+import { errorMessage } from '../../lib/utils'
 import { Button } from '../../components/ui/Button'
 import { PasswordInput } from '../../components/ui/PasswordInput'
 
@@ -21,10 +21,7 @@ export default function ResetPasswordPage() {
       toast.success('Password reset — sign in with your new password')
       navigate('/login')
     },
-    onError: (e) => {
-      const detail = axios.isAxiosError(e) ? (e.response?.data as { detail?: string })?.detail : undefined
-      toast.error(detail || 'That reset link is invalid or has expired')
-    },
+    onError: (e) => toast.error(errorMessage(e, 'That reset link is invalid or has expired')),
   })
 
   return (

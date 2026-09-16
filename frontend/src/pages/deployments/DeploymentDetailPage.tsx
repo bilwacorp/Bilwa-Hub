@@ -3,32 +3,15 @@ import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
-import axios from 'axios'
 import { RotateCw } from 'lucide-react'
 import api from '../../lib/api'
-import { formatDate } from '../../lib/utils'
+import { formatDate, errorMessage as errMsg } from '../../lib/utils'
 import { useAuthStore } from '../../stores/auth'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Modal } from '../../components/ui/Modal'
 import { Badge } from '../../components/ui/Badge'
 import type { Deployment, StaffOption } from '../../types'
-
-function errMsg(err: unknown, fallback: string) {
-  if (!axios.isAxiosError(err)) return fallback
-  const detail = (err.response?.data as { detail?: unknown } | undefined)?.detail
-  // A 422 body's `detail` is FastAPI's list of Pydantic error objects
-  // ({type, loc, msg, ...}), not a string — rendering it directly into a
-  // toast crashes React ("Objects are not valid as a React child"). Every
-  // other error shape this app returns (403/404/409/502) is a plain
-  // string, so only this one needs unwrapping.
-  if (typeof detail === 'string') return detail
-  if (Array.isArray(detail) && detail.length > 0) {
-    const first = detail[0] as { msg?: string } | undefined
-    return first?.msg || fallback
-  }
-  return fallback
-}
 
 // Money actions (renew/suspend/change-plan) run immediately, unless a
 // published approval workflow is configured for that action (see backend's

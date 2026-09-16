@@ -3,9 +3,9 @@ import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
-import axios from 'axios'
 import { Plus } from 'lucide-react'
 import api from '../../lib/api'
+import { errorMessage as errorDetail } from '../../lib/utils'
 import { useAuthStore } from '../../stores/auth'
 import { DataTable, type Column } from '../../components/ui/DataTable'
 import { Badge } from '../../components/ui/Badge'
@@ -15,10 +15,6 @@ import { Button } from '../../components/ui/Button'
 import type { WorkflowDefinition } from '../../types'
 
 type NewWorkflowForm = { key: string; name: string; description: string }
-
-function errorDetail(e: unknown): string | undefined {
-  return axios.isAxiosError(e) ? (e.response?.data as { detail?: string })?.detail : undefined
-}
 
 export default function WorkflowListPage() {
   const qc = useQueryClient()
@@ -32,7 +28,7 @@ export default function WorkflowListPage() {
   const toggleMutation = useMutation({
     mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) => api.patch(`/workflows/${id}`, { is_active }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['workflows'] }),
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to update workflow'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to update workflow')),
   })
 
   const [showCreate, setShowCreate] = useState(false)
@@ -45,7 +41,7 @@ export default function WorkflowListPage() {
       form.reset({ key: '', name: '', description: '' })
       qc.invalidateQueries({ queryKey: ['workflows'] })
     },
-    onError: (e) => toast.error(errorDetail(e) || 'Failed to create workflow'),
+    onError: (e) => toast.error(errorDetail(e, 'Failed to create workflow')),
   })
 
   const columns: Column<WorkflowDefinition>[] = [
