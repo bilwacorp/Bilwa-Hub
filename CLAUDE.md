@@ -194,11 +194,26 @@ api/routers/
 
 ### Frontend — `frontend/src/`
 
+Design system (`tailwind.config.js`, `src/index.css`, `public/*.png`) is
+ported from PoultryPro-CBF's frontend — same color/fontSize/spacing/
+borderRadius/boxShadow tokens, same Inter font, and the real BilwaCorp
+brand assets (`favicon.png`, `apple-touch-icon.png`, `logo-dark.png` —
+light-surface wordmark, `logo-light.png` — dark-surface/inverted, for any
+future dark-surface use) copied over from PoultryPro-CBF's `public/`
+(`logo-sq-alpha-dark.png` / `logo-sq-alpha-trimmed.png` there). The
+Shell/sidebar in `App.tsx` (240px fixed sidebar, left-accent-bar nav
+treatment, avatar+role+logout footer) is a simplified version of that
+repo's `components/layout/Sidebar.tsx` — no search/refresh/status-popover/
+docs-link/mobile-bottom-sheet, this hub doesn't have those features; the
+mobile equivalent here is a plain slide-in drawer instead.
+
 ```
 lib/api.ts, lib/utils.ts     axios instance + cn()/formatDate() etc., mirrors PoultryOS-CBP
-components/ui/                Button, Input, Select, Modal, Badge, DataTable, Tabs — copied
-                              verbatim from PoultryOS-CBP's frontend/src/components/ui/
-                              (generic, no product-specific logic)
+components/ui/                Button, Input, Select, Modal, Badge, DataTable, Tabs, Card,
+                              PasswordInput — Button/Input/Select/Modal/Badge/Tabs/DataTable
+                              copied verbatim from PoultryOS-CBP's frontend/src/components/ui/
+                              (generic, no product-specific logic); Card ported from
+                              PoultryPro-CBF's equivalent; PasswordInput is hub-specific
 pages/auth/LoginPage.tsx
 pages/deployments/DeploymentsListPage.tsx    client name, status, plan, expiry, last-
                                               heartbeat health indicator

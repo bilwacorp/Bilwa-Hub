@@ -22,25 +22,30 @@ export default function ForgotPasswordPage() {
   })
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="w-full max-w-sm bg-surface border border-border rounded-lg shadow-card p-6">
-        <h1 className="text-xl font-semibold text-text mb-1">Forgot password</h1>
-        <p className="text-sm text-muted mb-6">Enter your username and we'll email you a reset link, if there's an address on file.</p>
+    <div className="min-h-screen flex items-center justify-center bg-background px-4">
+      <div className="w-full max-w-sm">
+        <div className="flex justify-center mb-6">
+          <img src="/logo-dark.png" alt="BilwaCorp" className="h-10 w-auto object-contain" />
+        </div>
+        <div className="bg-surface border border-border rounded-lg shadow-card p-6">
+          <h1 className="text-lg font-semibold text-text mb-1">Forgot password</h1>
+          <p className="text-sm text-muted mb-6">Enter your username and we'll email you a reset link, if there's an address on file.</p>
 
-        {mutation.isSuccess ? (
-          <div className="space-y-4">
-            <p className="text-sm text-text">
-              If that account exists and has an email on file, a reset link is on its way — it expires in 30 minutes.
-            </p>
-            <Link to="/login" className="text-sm text-accent hover:underline">Back to sign in</Link>
-          </div>
-        ) : (
-          <form className="space-y-4" onSubmit={handleSubmit((v) => mutation.mutate(v))}>
-            <Input label="Username" {...register('username', { required: true })} />
-            <Button type="submit" className="w-full" loading={mutation.isPending}>Send reset link</Button>
-            <Link to="/login" className="block text-center text-sm text-accent hover:underline">Back to sign in</Link>
-          </form>
-        )}
+          {mutation.isSuccess ? (
+            <div className="space-y-4">
+              <p className="text-sm text-text">
+                If that account exists and has an email on file, a reset link is on its way — it expires in 30 minutes.
+              </p>
+              <Link to="/login" className="text-sm text-accent hover:underline">Back to sign in</Link>
+            </div>
+          ) : (
+            <form className="space-y-4" onSubmit={handleSubmit((v) => mutation.mutate(v))}>
+              <Input label="Username" {...register('username', { required: true })} />
+              <Button type="submit" className="w-full" loading={mutation.isPending}>Send reset link</Button>
+              <Link to="/login" className="block text-center text-sm text-accent hover:underline">Back to sign in</Link>
+            </form>
+          )}
+        </div>
       </div>
     </div>
   )

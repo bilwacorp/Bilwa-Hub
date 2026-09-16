@@ -28,34 +28,39 @@ export default function ResetPasswordPage() {
   })
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="w-full max-w-sm bg-surface border border-border rounded-lg shadow-card p-6">
-        <h1 className="text-xl font-semibold text-text mb-1">Reset password</h1>
-        <p className="text-sm text-muted mb-6">Choose a new password for your account.</p>
+    <div className="min-h-screen flex items-center justify-center bg-background px-4">
+      <div className="w-full max-w-sm">
+        <div className="flex justify-center mb-6">
+          <img src="/logo-dark.png" alt="BilwaCorp" className="h-10 w-auto object-contain" />
+        </div>
+        <div className="bg-surface border border-border rounded-lg shadow-card p-6">
+          <h1 className="text-lg font-semibold text-text mb-1">Reset password</h1>
+          <p className="text-sm text-muted mb-6">Choose a new password for your account.</p>
 
-        {!token ? (
-          <div className="space-y-4">
-            <p className="text-sm text-danger">This reset link is missing its token — request a new one.</p>
-            <Link to="/forgot-password" className="text-sm text-accent hover:underline">Request a new link</Link>
-          </div>
-        ) : (
-          <form className="space-y-4" onSubmit={handleSubmit((v) => mutation.mutate(v))}>
-            <PasswordInput
-              label="New password"
-              error={errors.new_password?.message}
-              {...register('new_password', { required: true, minLength: { value: 8, message: 'At least 8 characters' } })}
-            />
-            <PasswordInput
-              label="Confirm new password"
-              error={errors.confirm_password?.message}
-              {...register('confirm_password', {
-                required: true,
-                validate: (v) => v === watch('new_password') || "Passwords don't match",
-              })}
-            />
-            <Button type="submit" className="w-full" loading={mutation.isPending}>Reset password</Button>
-          </form>
-        )}
+          {!token ? (
+            <div className="space-y-4">
+              <p className="text-sm text-danger">This reset link is missing its token — request a new one.</p>
+              <Link to="/forgot-password" className="text-sm text-accent hover:underline">Request a new link</Link>
+            </div>
+          ) : (
+            <form className="space-y-4" onSubmit={handleSubmit((v) => mutation.mutate(v))}>
+              <PasswordInput
+                label="New password"
+                error={errors.new_password?.message}
+                {...register('new_password', { required: true, minLength: { value: 8, message: 'At least 8 characters' } })}
+              />
+              <PasswordInput
+                label="Confirm new password"
+                error={errors.confirm_password?.message}
+                {...register('confirm_password', {
+                  required: true,
+                  validate: (v) => v === watch('new_password') || "Passwords don't match",
+                })}
+              />
+              <Button type="submit" className="w-full" loading={mutation.isPending}>Reset password</Button>
+            </form>
+          )}
+        </div>
       </div>
     </div>
   )
