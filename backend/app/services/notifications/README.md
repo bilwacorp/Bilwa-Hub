@@ -85,6 +85,35 @@ SMTP_TLS=true
 SMTP_USE_SSL=false
 ```
 
+**Example — MXroute / cPanel-style mail hosting:**
+```
+SMTP_HOST=<your assigned server, e.g. sunfire.mxrouting.net>
+SMTP_PORT=587
+SMTP_USE_SSL=false
+SMTP_TLS=true
+SMTP_USERNAME=alerts@yourdomain.com   # full email address, not just "alerts"
+SMTP_PASSWORD=<mailbox password, not the MXroute account/billing login>
+FROM_EMAIL=alerts@yourdomain.com
+```
+
+### First-deploy gotchas seen in practice
+
+- **Port 465 times out but 587 connects** — many cloud/VPS hosts block outbound
+  port 465 (and sometimes 25) by default to curb spam, while leaving 587
+  open, or vice versa. If SMTP connection attempts hang and time out (not an
+  auth error), try the other port before assuming credentials are wrong. If
+  every SMTP port times out, the host is blocking outbound SMTP wholesale —
+  contact the hosting provider's support to have it lifted (routine
+  request), or check the mail provider for a documented relay/submission
+  endpoint on a non-standard port.
+- **`535 Incorrect authentication data`** — the connection succeeded but the
+  login was rejected. For MXroute and most cPanel-style mail hosts,
+  `SMTP_USERNAME` must be the *full email address* (`alerts@yourdomain.com`),
+  not just the mailbox's local part (`alerts`) — this is the most common
+  cause. Also check for trailing whitespace on `SMTP_USERNAME`/`SMTP_PASSWORD`
+  from copy-pasting into Dokploy's Environment tab, and that the password is
+  the mailbox's own password, not an account/billing login.
+
 ## WhatsApp setup
 
 `providers/whatsapp.py` doesn't know about any specific vendor — it POSTs a

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import api from '../../lib/api'
@@ -19,9 +20,16 @@ const STATUS_VARIANT: Record<SupportTicketStatus, 'amber' | 'blue' | 'green' | '
 
 export default function SupportTicketsPage() {
   const qc = useQueryClient()
+  // A support-ticket notification's "View ticket" link lands here with
+  // ?deployment_id=... (see backend/app/services/notification_triggers.py)
+  // — /tickets is the only place a ticket can be viewed, the deployment
+  // detail page doesn't show tickets.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const deploymentId = searchParams.get('deployment_id')
+
   const { data, isLoading } = useQuery({
-    queryKey: ['tickets'],
-    queryFn: () => api.get<SupportTicketListResponse>('/tickets').then((r) => r.data),
+    queryKey: ['tickets', deploymentId],
+    queryFn: () => api.get<SupportTicketListResponse>('/tickets', { params: { deployment_id: deploymentId || undefined } }).then((r) => r.data),
     refetchInterval: 60_000,
   })
 
@@ -51,7 +59,14 @@ export default function SupportTicketsPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold text-text mb-4">Support Tickets</h1>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-xl font-semibold text-text">Support Tickets</h1>
+        {deploymentId && (
+          <Button size="sm" variant="secondary" onClick={() => setSearchParams({})}>
+            Filtered to one deployment — Clear
+          </Button>
+        )}
+      </div>
       <DataTable columns={columns} data={data?.items ?? []} loading={isLoading} keyExtractor={(t) => t.id} emptyMessage="No support tickets yet." />
 
       <Modal

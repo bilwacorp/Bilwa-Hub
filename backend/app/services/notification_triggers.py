@@ -23,7 +23,18 @@ logger = logging.getLogger(__name__)
 
 
 def _deployment_url(deployment_id) -> str:
+    """Links to the deployment detail page, which shows the subscription
+    snapshot (including pending_requests) directly — the right destination
+    for a subscription-request alert."""
     return f"{settings.FRONTEND_URL.rstrip('/')}/deployments/{deployment_id}"
+
+
+def _tickets_url(deployment_id) -> str:
+    """Links to the fleet-wide tickets list pre-filtered to this deployment
+    (SupportTicketsPage reads ?deployment_id= — see App.tsx) — the deployment
+    detail page itself doesn't show tickets, so a support-ticket alert must
+    not link there."""
+    return f"{settings.FRONTEND_URL.rstrip('/')}/tickets?deployment_id={deployment_id}"
 
 
 async def notify_support_ticket_raised(db: AsyncSession, ticket: SupportTicket, deployment: Deployment) -> None:
@@ -31,7 +42,7 @@ async def notify_support_ticket_raised(db: AsyncSession, ticket: SupportTicket, 
     if not recipients:
         return
     service = NotificationService(db)
-    url = _deployment_url(deployment.id)
+    url = _tickets_url(deployment.id)
     for user in recipients:
         if user.email:
             try:
