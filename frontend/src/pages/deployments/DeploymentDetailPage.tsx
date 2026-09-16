@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
-import { RotateCw } from 'lucide-react'
+import { RotateCw, ExternalLink } from 'lucide-react'
 import api from '../../lib/api'
 import { formatDate, errorMessage as errMsg } from '../../lib/utils'
 import { useAuthStore } from '../../stores/auth'
@@ -11,7 +11,7 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Modal } from '../../components/ui/Modal'
 import { Badge } from '../../components/ui/Badge'
-import type { Deployment, DeploymentActionExecution, StaffOption } from '../../types'
+import type { Deployment, DeploymentActionExecution, DeploymentGitHubInfo, StaffOption } from '../../types'
 
 // Money actions (renew/suspend/change-plan) run immediately, unless a
 // published approval workflow is configured for that action (see backend's
@@ -174,6 +174,15 @@ export default function DeploymentDetailPage() {
     onError: (e) => toast.error(errMsg(e, 'Failed to retry')),
   })
 
+  // HUB-Expansion.md Phase 3 — GitHub reference data surfaced through
+  // this one deployment's lens (row-scoped server-side by
+  // DEPLOYMENTS_VIEW, same as every other route here — not a github.*
+  // permission; see api/routers/deployments.py's comment).
+  const { data: githubInfo } = useQuery({
+    queryKey: ['deployment-github', deploymentId],
+    queryFn: () => api.get<DeploymentGitHubInfo>(`/deployments/${deploymentId}/github`).then((r) => r.data),
+  })
+
   if (!d) return <div className="p-6 text-muted">Loading…</div>
 
   const snap = d.latest_snapshot
@@ -333,6 +342,49 @@ export default function DeploymentDetailPage() {
               </div>
             ))}
             {(snap.usage ?? []).length === 0 && <p className="text-sm text-muted">No plan limits configured.</p>}
+          </div>
+        </div>
+      )}
+
+      {githubInfo && githubInfo.repositories.length > 0 && (
+        <div className="bg-surface border border-border rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-text mb-3">GitHub</h3>
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-muted">Repository</span>
+              {githubInfo.primary_repository && (
+                <a href={githubInfo.primary_repository.html_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-text hover:text-accent">
+                  {githubInfo.primary_repository.full_name} <ExternalLink size={12} />
+                </a>
+              )}
+            </div>
+            {githubInfo.latest_commit && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted">Current commit</span>
+                <a href={githubInfo.latest_commit.html_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-mono text-xs text-text hover:text-accent">
+                  {githubInfo.latest_commit.sha.slice(0, 7)} <ExternalLink size={11} />
+                </a>
+              </div>
+            )}
+            {githubInfo.latest_pull_request && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted">Related PR</span>
+                <a href={githubInfo.latest_pull_request.html_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-text hover:text-accent">
+                  #{githubInfo.latest_pull_request.number} {githubInfo.latest_pull_request.title} <ExternalLink size={12} />
+                </a>
+              </div>
+            )}
+            {githubInfo.latest_release && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted">Related release</span>
+                <a href={githubInfo.latest_release.html_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-mono text-xs text-text hover:text-accent">
+                  {githubInfo.latest_release.tag_name} <ExternalLink size={11} />
+                </a>
+              </div>
+            )}
+            {githubInfo.repositories.length > 1 && (
+              <p className="text-xs text-muted pt-1">+{githubInfo.repositories.length - 1} more mapped repository(ies).</p>
+            )}
           </div>
         </div>
       )}

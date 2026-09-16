@@ -129,6 +129,18 @@ EVENTS_VIEW_ALL = ("events", "view_all")
 # 12 — see app/models.py's DeploymentActionExecution) ───────────────────────
 ACTIONS_RETRY = ("actions", "retry")
 
+# ── GitHub integration (HUB-Expansion.md Phase 3 — see
+# app/integrations/github/). Not row-scoped like deployments/tickets/
+# maintenance — a repository isn't inherently one customer's confidential
+# data, and there's no github.view_all companion permission (see
+# docs/integrations/github.md's "Authorization" section for why). The one
+# exception, GET /deployments/{id}/github, reuses DEPLOYMENTS_VIEW's own
+# row-level scoping rather than a github.* permission at all. ─────────────
+GITHUB_VIEW = ("github", "view")
+GITHUB_MANAGE = ("github", "manage")                    # create/edit an integration's credentials
+GITHUB_TEST_CONNECTION = ("github", "test_connection")   # diagnostic — same tier as deployments.check_health
+GITHUB_SYNC = ("github", "sync")                         # trigger a repository sync
+
 # (resource, action, description) — the migration-seeded catalog. Order
 # here is also the order the admin UI's checkbox grid renders in within
 # each resource's group.
@@ -181,6 +193,10 @@ ALL_PERMISSIONS: list[tuple[str, str, str]] = [
     (*EVENTS_VIEW, "View the operational event log for deployments assigned to you (non-deployment events are always visible)"),
     (*EVENTS_VIEW_ALL, "View the operational event log for every deployment"),
     (*ACTIONS_RETRY, "Retry a deployment action whose execution failed after approval"),
+    (*GITHUB_VIEW, "View configured GitHub integrations, repositories, pull requests, issues, and releases"),
+    (*GITHUB_MANAGE, "Create/edit a GitHub integration's credentials"),
+    (*GITHUB_TEST_CONNECTION, "Test a GitHub integration's stored credentials"),
+    (*GITHUB_SYNC, "Trigger a GitHub repository sync"),
 ]
 
 

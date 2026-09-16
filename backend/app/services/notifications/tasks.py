@@ -11,11 +11,9 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from celery import Celery
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
-from app.db.session import _db_url
+from app.db.session import make_celery_sessionmaker
 from app.services.notifications import repository
 from app.services.notifications.exceptions import (
     NotificationException, SMTPConnectionException, WhatsAppConnectionException,
@@ -27,27 +25,9 @@ from app.services.notifications.render import render_template, render_whatsapp_t
 
 logger = logging.getLogger(__name__)
 
-# A dedicated engine for the Celery worker, separate from the app's pooled
-# engine in db/session.py. _run_async below calls asyncio.run() per task, so
-# every task gets a brand-new event loop — but asyncpg connections are bound
-# to the loop that created them. A real connection pool would hand a task a
-# connection created on a previous (now-closed) task's loop, breaking with
-# "attached to a different loop". NullPool means every checkout is a fresh
-# connection and every checkin closes it, so no connection ever crosses an
-# event loop boundary.
-_celery_engine = create_async_engine(
-    _db_url,
-    echo=False,
-    poolclass=NullPool,
-    connect_args={"ssl": settings.DB_SSL_MODE, "statement_cache_size": 0},
-)
-CelerySessionLocal = async_sessionmaker(
-    _celery_engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-    autocommit=False,
-    autoflush=False,
-)
+# See db/session.py's make_celery_sessionmaker docstring for why this needs
+# its own NullPool engine rather than the app's pooled one.
+CelerySessionLocal = make_celery_sessionmaker()
 
 celery_app = Celery(
     "notifications",
@@ -200,3 +180,15 @@ def _run_async(coro):
     else:
         with ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(asyncio.run, coro).result()
+
+
+# celery-worker's entrypoint is `-A app.services.notifications.tasks:
+# celery_app worker` (docker-compose.yml) — Celery's -A only imports that
+# one module, it doesn't auto-discover sibling packages. Importing
+# GitHub's tasks module here (after celery_app already exists above)
+# registers its @celery_app.task(...)-decorated functions on this same
+# app object, so the one worker process picks them up too — see
+# docs/integrations/github.md's "Celery task registration" for why this
+# was simpler and less risky than relocating celery_app or running a
+# second worker.
+from app.integrations.github import tasks as _github_tasks  # noqa: E402,F401

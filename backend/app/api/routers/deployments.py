@@ -33,6 +33,12 @@ from app.schemas import (
     SuspendActionRequest,
 )
 from app.approvals import deployment_hooks
+from app.integrations.github.models import (
+    DeploymentGitHubRepository, GitHubCommit, GitHubPullRequest, GitHubRelease, GitHubRepository,
+)
+from app.integrations.github.schemas import (
+    DeploymentGitHubInfo, GitHubCommitOut, GitHubPullRequestOut, GitHubReleaseOut, GitHubRepositoryOut,
+)
 from app.services import deployment_client
 from app.services.deployment_scope import assigned_deployment_ids
 from app.services.events import record_event
@@ -423,3 +429,49 @@ async def retry_action_execution(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Execution not found")
     execution = await deployment_hooks.retry_execution(db, current_user, execution)
     return await _execution_out(db, execution)
+
+
+# ── GitHub (HUB-Expansion.md Phase 3 — see app/integrations/github/) ──────
+# Gated by DEPLOYMENTS_VIEW, not a github.* permission: this is GitHub
+# data surfaced through one deployment's lens, so it follows that
+# deployment's own row-level visibility (_get_visible_or_404) rather than
+# github.view's fleet-wide, unscoped visibility — see
+# docs/integrations/github.md's "Authorization" section.
+
+@router.get("/{deployment_id}/github", response_model=DeploymentGitHubInfo)
+async def get_deployment_github_info(
+    deployment_id: str, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_VIEW)),
+):
+    d = await _get_visible_or_404(db, deployment_id, current_user)
+    mapping_rows = (await db.execute(
+        select(DeploymentGitHubRepository, GitHubRepository)
+        .join(GitHubRepository, GitHubRepository.id == DeploymentGitHubRepository.repository_id)
+        .where(DeploymentGitHubRepository.deployment_id == d.id)
+    )).all()
+
+    repositories = [repo for _, repo in mapping_rows]
+    primary_repo = next((repo for mapping, repo in mapping_rows if mapping.is_primary), None) or (repositories[0] if repositories else None)
+
+    latest_commit = latest_pr = latest_release = None
+    if primary_repo is not None:
+        latest_commit = (await db.execute(
+            select(GitHubCommit).where(GitHubCommit.repository_id == primary_repo.id)
+            .order_by(GitHubCommit.committed_at.desc()).limit(1)
+        )).scalar_one_or_none()
+        latest_pr = (await db.execute(
+            select(GitHubPullRequest).where(GitHubPullRequest.repository_id == primary_repo.id)
+            .order_by(GitHubPullRequest.github_updated_at.desc()).limit(1)
+        )).scalar_one_or_none()
+        latest_release = (await db.execute(
+            select(GitHubRelease).where(GitHubRelease.repository_id == primary_repo.id)
+            .order_by(GitHubRelease.published_at.desc()).limit(1)
+        )).scalar_one_or_none()
+
+    return DeploymentGitHubInfo(
+        repositories=[GitHubRepositoryOut.model_validate(r) for r in repositories],
+        primary_repository=GitHubRepositoryOut.model_validate(primary_repo) if primary_repo else None,
+        latest_commit=GitHubCommitOut.model_validate(latest_commit) if latest_commit else None,
+        latest_pull_request=GitHubPullRequestOut.model_validate(latest_pr) if latest_pr else None,
+        latest_release=GitHubReleaseOut.model_validate(latest_release) if latest_release else None,
+    )

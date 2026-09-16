@@ -20,17 +20,28 @@ if added now.
 SOURCE_HUB = "hub"              # a staff action against the hub's own API
 SOURCE_DEPLOYMENT = "deployment"  # an inbound call from a client deployment
 SOURCE_ENGINE = "engine"        # the workflow engine itself, not a business router
+SOURCE_GITHUB = "github"        # an inbound GitHub webhook, or a sync fetch from the GitHub API
 
 # ── actor types (OperationalEvent.actor_type) ─────────────────────────────
 ACTOR_STAFF = "staff_user"
 ACTOR_DEPLOYMENT = "deployment"
 ACTOR_SYSTEM = "system"
+# A GitHub login, not a HUB user — OperationalEvent.actor_id stays NULL for
+# these (it's UUID-typed; a GitHub login isn't a HUB id) and the login
+# lives in event_metadata instead. See docs/integrations/github.md.
+ACTOR_GITHUB_USER = "github_user"
 
 # ── entity types (OperationalEvent.entity_type — the polymorphic target) ──
 ENTITY_DEPLOYMENT = "deployment"
 ENTITY_TICKET = "ticket"
 ENTITY_MAINTENANCE_WINDOW = "maintenance_window"
 ENTITY_WORKFLOW_INSTANCE = "workflow_instance"
+ENTITY_GITHUB_REPOSITORY = "github_repository"
+ENTITY_GITHUB_PULL_REQUEST = "github_pull_request"
+ENTITY_GITHUB_ISSUE = "github_issue"
+ENTITY_GITHUB_RELEASE = "github_release"
+ENTITY_GITHUB_COMMIT = "github_commit"
+ENTITY_GITHUB_WEBHOOK_EVENT = "github_webhook_event"
 
 # ── deployment lifecycle ──────────────────────────────────────────────────
 DEPLOYMENT_REGISTERED = "deployment.registered"
@@ -87,3 +98,18 @@ WORKFLOW_ERRORED = "workflow.errored"
 # ── deployment action execution retries (HUB-Expansion.md Phase 12/13 —
 # see app/models.py's DeploymentActionExecution) ───────────────────────────
 DEPLOYMENT_ACTION_RETRIED = "deployment.action_retried"
+
+# ── GitHub integration (HUB-Expansion.md Phase 3 — see
+# app/integrations/github/ and docs/integrations/github.md) ───────────────
+GITHUB_WEBHOOK_RECEIVED = "github.webhook_received"
+GITHUB_WEBHOOK_FAILED = "github.webhook_failed"
+GITHUB_ISSUE_CREATED = "github.issue.created"
+GITHUB_ISSUE_UPDATED = "github.issue.updated"
+GITHUB_PULL_REQUEST_OPENED = "github.pull_request.opened"
+GITHUB_PULL_REQUEST_UPDATED = "github.pull_request.updated"
+GITHUB_PULL_REQUEST_MERGED = "github.pull_request.merged"
+GITHUB_PULL_REQUEST_CLOSED = "github.pull_request.closed"
+GITHUB_COMMIT_PUSHED = "github.commit.pushed"
+GITHUB_RELEASE_PUBLISHED = "github.release.published"
+GITHUB_REPOSITORY_SYNCED = "github.repository_synced"
+GITHUB_REPOSITORY_SYNC_FAILED = "github.repository_sync_failed"

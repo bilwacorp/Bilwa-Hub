@@ -15,6 +15,8 @@ from app.core.expiry_reminder_scheduler import start_scheduler as start_expiry_s
 from app.api.routers import auth, register, ingest, deployments, tickets, maintenance, users, notifications, rbac, events
 from app.approvals import api as approvals_api
 from app.approvals import deployment_hooks  # noqa: F401 — registers deployment completion hooks at import time
+from app.integrations.github import api as github_api
+from app.integrations.github import webhook_api as github_webhook_api
 from app.rules import api as rules_api
 from app.workflow import api as workflow_api
 
@@ -111,3 +113,5 @@ app.include_router(workflow_api.router, prefix=PREFIX)
 app.include_router(workflow_api.instances_router, prefix=PREFIX)
 app.include_router(rules_api.router, prefix=PREFIX)
 app.include_router(approvals_api.router, prefix=PREFIX)
+app.include_router(github_api.router, prefix=PREFIX)
+app.include_router(github_webhook_api.router, prefix=PREFIX)

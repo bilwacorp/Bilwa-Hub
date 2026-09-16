@@ -385,3 +385,95 @@ export interface DeploymentActionExecution {
   updated_at: string
   attempts: DeploymentActionAttempt[]
 }
+
+// ── GitHub integration (HUB-Expansion.md Phase 3) ──────────────────────────
+
+export type GitHubIntegrationStatus = 'connected' | 'disconnected' | 'error'
+
+export interface GitHubIntegration {
+  id: string
+  name: string
+  github_org: string
+  auth_mode: 'pat' | 'github_app'
+  status: GitHubIntegrationStatus
+  has_access_token: boolean
+  has_webhook_secret: boolean
+  last_synced_at: string | null
+  last_webhook_at: string | null
+  last_error: string | null
+  last_error_at: string | null
+  created_at: string
+  webhook_url_path: string
+}
+
+export interface GitHubRepository {
+  id: string
+  integration_id: string
+  external_id: number
+  full_name: string
+  name: string
+  owner: string
+  default_branch: string
+  html_url: string
+  is_active: boolean
+  last_synced_at: string | null
+  created_at: string
+}
+
+export interface GitHubPullRequest {
+  id: string
+  repository_id: string
+  number: number
+  title: string
+  state: string
+  is_draft: boolean
+  author_login: string | null
+  html_url: string
+  merge_commit_sha: string | null
+  opened_at: string
+  merged_at: string | null
+  closed_at: string | null
+}
+
+export interface GitHubIssue {
+  id: string
+  repository_id: string
+  number: number
+  title: string
+  state: string
+  author_login: string | null
+  html_url: string
+  opened_at: string
+  closed_at: string | null
+}
+
+export interface GitHubRelease {
+  id: string
+  repository_id: string
+  tag_name: string
+  name: string | null
+  html_url: string
+  target_commit_sha: string | null
+  is_prerelease: boolean
+  is_draft: boolean
+  published_at: string | null
+}
+
+export interface GitHubCommit {
+  id: string
+  repository_id: string
+  sha: string
+  message: string | null
+  author_name: string | null
+  author_login: string | null
+  html_url: string
+  committed_at: string
+}
+
+export interface DeploymentGitHubInfo {
+  repositories: GitHubRepository[]
+  primary_repository: GitHubRepository | null
+  latest_commit: GitHubCommit | null
+  latest_pull_request: GitHubPullRequest | null
+  latest_release: GitHubRelease | null
+}
