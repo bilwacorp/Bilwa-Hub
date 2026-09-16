@@ -72,6 +72,21 @@ class Deployment(Base):
     )
 
 
+class DeploymentStaffAssignment(Base):
+    """Many-to-many: which staff (User) are assigned to which Deployment.
+    Narrows notification fan-out (services/notifications/recipients.py's
+    recipients_for_deployment) to just the assigned staff for that
+    deployment's tickets/subscription-request alerts, instead of every
+    FLEET_MANAGE holder — a deployment with no assignment still falls back
+    to notifying everyone, so nothing breaks for an unassigned deployment.
+    Purely a junction row — no own id, composite PK."""
+    __tablename__ = "deployment_staff_assignments"
+
+    deployment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("deployments.id"), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), primary_key=True)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class DeploymentSnapshot(Base):
     """One row per heartbeat received — see the plan's registration+
     heartbeat flow. received_at is always set server-side (never trusts the

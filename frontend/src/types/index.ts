@@ -31,6 +31,15 @@ export interface DeploymentSnapshot {
 
 export type DerivedDeploymentStatus = 'never' | 'online' | 'stale' | 'offline' | 'maintenance'
 
+// Minimal staff shape for the deployment-assignment picker — not the full
+// StaffUser (role/is_active/created_at), since GET /deployments/staff-options
+// is FLEET_MANAGE (both roles), not STAFF_MANAGE (admin-only, see StaffUser).
+export interface StaffOption {
+  id: string
+  username: string
+  full_name: string | null
+}
+
 export interface Deployment {
   id: string
   client_name: string
@@ -41,6 +50,10 @@ export interface Deployment {
   latest_snapshot: DeploymentSnapshot | null
   heartbeat_age_seconds: number | null
   derived_status: DerivedDeploymentStatus
+  // Staff assigned to this deployment — when non-empty, narrows who gets
+  // notified about its tickets/subscription requests (see backend's
+  // services/notifications/recipients.py).
+  assigned_staff: StaffOption[]
 }
 
 export interface DeploymentListResponse {

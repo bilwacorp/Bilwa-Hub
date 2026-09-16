@@ -6,17 +6,19 @@ import secrets
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.permissions import FLEET_MANAGE, require_permission
 from app.db.session import get_db
-from app.models import Deployment, DeploymentSnapshot, DeploymentStatus, MaintenanceWindow, User
+from app.models import (
+    Deployment, DeploymentSnapshot, DeploymentStaffAssignment, DeploymentStatus, MaintenanceWindow, User,
+)
 from app.schemas import (
     ChangePlanActionRequest, DeploymentCreate, DeploymentCreateOut, DeploymentListResponse,
-    DeploymentOut, DeploymentSnapshotOut, ExtendExpiryActionRequest, ReissueTokenOut,
-    RenewActionRequest, SubscriptionRequestReviewAction, SuspendActionRequest,
+    DeploymentOut, DeploymentSnapshotOut, DeploymentStaffAssignRequest, ExtendExpiryActionRequest,
+    ReissueTokenOut, RenewActionRequest, StaffOptionOut, SubscriptionRequestReviewAction, SuspendActionRequest,
 )
 from app.services import deployment_client
 from app.services.maintenance_query import currently_active_windows
@@ -29,6 +31,23 @@ async def _latest_snapshot(db: AsyncSession, deployment_id) -> DeploymentSnapsho
         select(DeploymentSnapshot).where(DeploymentSnapshot.deployment_id == deployment_id)
         .order_by(DeploymentSnapshot.received_at.desc()).limit(1)
     )).scalar_one_or_none()
+
+
+async def _assigned_staff_map(db: AsyncSession, deployment_ids: list) -> dict:
+    """One query for however many deployments are being rendered (list or
+    detail) — avoids an assignment lookup per row."""
+    if not deployment_ids:
+        return {}
+    rows = (await db.execute(
+        select(DeploymentStaffAssignment.deployment_id, User)
+        .join(User, User.id == DeploymentStaffAssignment.user_id)
+        .where(DeploymentStaffAssignment.deployment_id.in_(deployment_ids))
+        .order_by(User.username)
+    )).all()
+    out: dict = {}
+    for deployment_id, user in rows:
+        out.setdefault(deployment_id, []).append(StaffOptionOut.model_validate(user))
+    return out
 
 
 def _derive_status(d, snap, active_windows: list[MaintenanceWindow]):
@@ -50,11 +69,15 @@ def _derive_status(d, snap, active_windows: list[MaintenanceWindow]):
     return age, "online"
 
 
-async def _to_out(db: AsyncSession, d: Deployment, active_windows: list[MaintenanceWindow]) -> DeploymentOut:
+async def _to_out(
+    db: AsyncSession, d: Deployment, active_windows: list[MaintenanceWindow], assigned_staff_map: dict | None = None,
+) -> DeploymentOut:
     snap = await _latest_snapshot(db, d.id)
     out = DeploymentOut.model_validate(d)
     out.latest_snapshot = DeploymentSnapshotOut.model_validate(snap) if snap else None
     out.heartbeat_age_seconds, out.derived_status = _derive_status(d, snap, active_windows)
+    if assigned_staff_map is not None:
+        out.assigned_staff = assigned_staff_map.get(d.id, [])
     return out
 
 
@@ -83,6 +106,17 @@ async def create_deployment(body: DeploymentCreate, db: AsyncSession = Depends(g
     return DeploymentCreateOut(id=d.id, client_name=d.client_name, slug=d.slug, status=d.status, registration_token=token)
 
 
+@router.get("/staff-options", response_model=list[StaffOptionOut])
+async def list_staff_options(db: AsyncSession = Depends(get_db)):
+    """Every active staff account, for the deployment-assignment picker —
+    deliberately separate from GET /users (STAFF_MANAGE/admin-only, and a
+    much fuller shape) since both 'admin' and 'engineer' need this to
+    assign staff to a deployment. Registered ahead of GET /{deployment_id}
+    so "staff-options" isn't swallowed as a deployment_id path param."""
+    rows = (await db.execute(select(User).where(User.is_active.is_(True)).order_by(User.username))).scalars().all()
+    return [StaffOptionOut.model_validate(u) for u in rows]
+
+
 @router.get("", response_model=DeploymentListResponse)
 async def list_deployments(
     page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), db: AsyncSession = Depends(get_db),
@@ -92,13 +126,38 @@ async def list_deployments(
         select(Deployment).order_by(Deployment.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
     )).scalars().all()
     active_windows = await currently_active_windows(db)
-    return DeploymentListResponse(total=total, items=[await _to_out(db, d, active_windows) for d in rows])
+    assigned_staff_map = await _assigned_staff_map(db, [d.id for d in rows])
+    return DeploymentListResponse(total=total, items=[await _to_out(db, d, active_windows, assigned_staff_map) for d in rows])
 
 
 @router.get("/{deployment_id}", response_model=DeploymentOut)
 async def get_deployment(deployment_id: str, db: AsyncSession = Depends(get_db)):
     d = await _get_or_404(db, deployment_id)
-    return await _to_out(db, d, await currently_active_windows(db))
+    assigned_staff_map = await _assigned_staff_map(db, [d.id])
+    return await _to_out(db, d, await currently_active_windows(db), assigned_staff_map)
+
+
+@router.put("/{deployment_id}/staff", response_model=list[StaffOptionOut])
+async def assign_staff(deployment_id: str, body: DeploymentStaffAssignRequest, db: AsyncSession = Depends(get_db)):
+    """Replaces this deployment's assigned-staff set wholesale — not an
+    incremental add/remove. Assigning at least one person here narrows
+    services/notifications/recipients.py's fan-out for this deployment's
+    tickets/subscription-requests to just the assigned staff; clearing the
+    set (empty user_ids) reverts to notifying every FLEET_MANAGE holder."""
+    d = await _get_or_404(db, deployment_id)
+    wanted_ids = list(dict.fromkeys(body.user_ids))  # de-dupe, preserve order
+    if wanted_ids:
+        found = (await db.execute(select(User.id).where(User.id.in_(wanted_ids)))).scalars().all()
+        missing = set(wanted_ids) - set(found)
+        if missing:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown staff user id(s): {', '.join(str(m) for m in missing)}")
+
+    await db.execute(delete(DeploymentStaffAssignment).where(DeploymentStaffAssignment.deployment_id == d.id))
+    for user_id in wanted_ids:
+        db.add(DeploymentStaffAssignment(deployment_id=d.id, user_id=user_id))
+    await db.flush()
+    assigned_staff_map = await _assigned_staff_map(db, [d.id])
+    return assigned_staff_map.get(d.id, [])
 
 
 @router.post("/{deployment_id}/reissue-token", response_model=ReissueTokenOut)

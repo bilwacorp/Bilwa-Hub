@@ -3,11 +3,12 @@
 router stays focused on parsing/persisting the inbound payload; see
 services/notifications/README.md's "Triggers" section for the full picture.
 
-Both fan out to every active fleet_staff() recipient — one email per
-recipient with an email on file, one WhatsApp message per recipient with a
-phone on file. A recipient with neither is simply skipped for both (same
-"never block the caller" posture as a missing address anywhere else in this
-package)."""
+Both fan out via recipients_for_deployment() — the deployment's explicitly
+assigned staff (api/routers/deployments.py's PUT .../staff) if any,
+otherwise every FLEET_MANAGE holder. One email per recipient with an email
+on file, one WhatsApp message per recipient with a phone on file. A
+recipient with neither is simply skipped for both (same "never block the
+caller" posture as a missing address anywhere else in this package)."""
 import logging
 from typing import Optional
 
@@ -16,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models import Deployment, SupportTicket
 from app.schemas import PendingRequestIn
-from app.services.notifications.recipients import fleet_staff
+from app.services.notifications.recipients import recipients_for_deployment
 from app.services.notifications.service import NotificationService
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ def _tickets_url(deployment_id) -> str:
 
 
 async def notify_support_ticket_raised(db: AsyncSession, ticket: SupportTicket, deployment: Deployment) -> None:
-    recipients = await fleet_staff(db)
+    recipients = await recipients_for_deployment(db, deployment.id)
     if not recipients:
         return
     service = NotificationService(db)
@@ -74,7 +75,7 @@ async def notify_support_ticket_raised(db: AsyncSession, ticket: SupportTicket, 
 async def notify_subscription_request_raised(
     db: AsyncSession, request: PendingRequestIn, deployment: Deployment,
 ) -> None:
-    recipients = await fleet_staff(db)
+    recipients = await recipients_for_deployment(db, deployment.id)
     if not recipients:
         return
     service = NotificationService(db)

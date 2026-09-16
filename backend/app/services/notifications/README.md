@@ -43,9 +43,14 @@ wired to this package:
   to find ones that are genuinely new, so an unchanged pending request
   doesn't re-notify every 2 hours.
 
-Both fan out to every active `fleet_staff()` recipient (`recipients.py`):
-one email per recipient with an email on file, one WhatsApp message per
-recipient with a phone on file (`User.phone`, set from the Staff page).
+Both fan out via `recipients_for_deployment()` (`recipients.py`): the staff
+explicitly assigned to that deployment (Deployments → a deployment →
+"Assigned Staff", `DeploymentStaffAssignment` / `PUT /deployments/{id}/staff`)
+if any, otherwise every active `fleet_staff()` holder (everyone with
+FLEET_MANAGE) — an unassigned deployment still notifies everyone rather than
+going silent. One email per recipient with an email on file, one WhatsApp
+message per recipient with a phone on file (`User.phone`, set from the Staff
+page).
 
 Adding a third trigger (a new template) is: a new `TEMPLATE_*` constant in
 `constants.py`, a `templates/<key>.html` + `templates_whatsapp/<key>.txt`

@@ -153,9 +153,11 @@ services/notification_triggers.py
                       (ingest.py's ingest_support_ticket) and a subscription renewal/upgrade
                       request raised (ingest.py's ingest_heartbeat — pending_requests arrives
                       as the deployment's full current list every heartbeat, so this diffs
-                      against the prior snapshot to find genuinely new requests). Fans out to
-                      every active user holding FLEET_MANAGE (admin + engineer) with an email
-                      and/or phone (User.phone) on file.
+                      against the prior snapshot to find genuinely new requests). Fans out via
+                      recipients.recipients_for_deployment() — a deployment's explicitly
+                      assigned staff (DeploymentStaffAssignment) if any, else every active
+                      FLEET_MANAGE holder — to whichever of email/WhatsApp each recipient has
+                      on file (User.email / User.phone).
 api/routers/
   auth.py             login/logout/refresh/me — MFA, phone/WhatsApp OTP, and mobile
                       refresh-token pairing all dropped (ported subset only)
@@ -163,8 +165,12 @@ api/routers/
   ingest.py            POST /ingest/heartbeat, POST /ingest/support-ticket — api_key bearer
                       auth (hash-compared against Deployment.api_key_hash)
   deployments.py        FLEET_MANAGE (admin + engineer): create pending deployment + token,
-                      list, detail (+ latest snapshot), reissue-token, and the inbound-action
-                      triggers (renew/suspend/change-plan/extend-expiry/review-request)
+                      list, detail (+ latest snapshot), reissue-token, the inbound-action
+                      triggers (renew/suspend/change-plan/extend-expiry/review-request), and
+                      GET staff-options / PUT {id}/staff (assign staff to a deployment — narrows
+                      that deployment's notification fan-out, see services/notifications/
+                      recipients.py). staff-options is registered ahead of GET /{deployment_id}
+                      so the literal path segment isn't swallowed by the dynamic one.
   tickets.py            FLEET_MANAGE: list/detail/update support tickets
   maintenance.py        FLEET_MANAGE: plain CRUD on maintenance windows, no automation
   users.py              STAFF_MANAGE (admin only): staff account CRUD (deactivate, not hard
@@ -189,7 +195,9 @@ pages/deployments/DeploymentDetailPage.tsx   latest snapshot (including pending_
                                               from the heartbeat payload directly — no
                                               separate live round-trip in Phase 1), renew/
                                               suspend/change-plan/extend-expiry action
-                                              buttons, request-review actions
+                                              buttons, request-review actions, Assigned Staff
+                                              checklist (narrows this deployment's notification
+                                              recipients — see CLAUDE.md's deployments.py entry)
 pages/tickets/SupportTicketsPage.tsx         fleet-wide ticket table + status update
 pages/maintenance/MaintenanceWindowsPage.tsx list + create/edit, no automation
 pages/users/StaffUsersPage.tsx               admin-only: staff table (role/active inline

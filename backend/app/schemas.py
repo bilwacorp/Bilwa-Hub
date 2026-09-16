@@ -226,6 +226,25 @@ class DeploymentSnapshotOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class StaffOptionOut(BaseModel):
+    """Minimal staff shape for a picker — deliberately not the full
+    StaffUserOut (role/is_active/created_at), since this is exposed to
+    anyone with FLEET_MANAGE (both admin + engineer), not just STAFF_MANAGE
+    (admin-only, see api/routers/users.py)."""
+    id: uuid.UUID
+    username: str
+    full_name: Optional[str]
+
+    model_config = {"from_attributes": True}
+
+
+class DeploymentStaffAssignRequest(BaseModel):
+    """Replaces the full assignment set for a deployment — not an
+    incremental add/remove, same 'replace wholesale' shape as
+    services/rbac.set_role."""
+    user_ids: List[uuid.UUID]
+
+
 class DeploymentOut(BaseModel):
     id: uuid.UUID
     client_name: str
@@ -239,6 +258,9 @@ class DeploymentOut(BaseModel):
     # deployments list renders directly — see api/routers/deployments.py.
     heartbeat_age_seconds: Optional[int] = None
     derived_status: Literal["never", "online", "stale", "offline", "maintenance"] = "never"
+    # Staff assigned to this deployment (services/notifications/recipients.py
+    # narrows ticket/subscription-request alerts to just these when non-empty).
+    assigned_staff: List[StaffOptionOut] = []
 
     model_config = {"from_attributes": True}
 

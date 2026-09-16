@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
@@ -11,7 +11,7 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Modal } from '../../components/ui/Modal'
 import { Badge } from '../../components/ui/Badge'
-import type { Deployment } from '../../types'
+import type { Deployment, StaffOption } from '../../types'
 
 function errMsg(err: unknown, fallback: string) {
   if (axios.isAxiosError(err)) return (err.response?.data as { detail?: string } | undefined)?.detail || fallback
@@ -51,6 +51,29 @@ export default function DeploymentDetailPage() {
   })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['deployment', deploymentId] })
+
+  const { data: staffOptions } = useQuery({
+    queryKey: ['staff-options'],
+    queryFn: () => api.get<StaffOption[]>('/deployments/staff-options').then((r) => r.data),
+  })
+
+  // Local, editable copy of the assignment set — initialized once from the
+  // server (not on every 30s refetch, which would clobber an in-progress
+  // edit). null = not yet loaded.
+  const [selectedStaffIds, setSelectedStaffIds] = useState<string[] | null>(null)
+  useEffect(() => {
+    if (d && selectedStaffIds === null) setSelectedStaffIds(d.assigned_staff.map((s) => s.id))
+  }, [d, selectedStaffIds])
+
+  const assignStaffMutation = useMutation({
+    mutationFn: (user_ids: string[]) => api.put(`/deployments/${deploymentId}/staff`, { user_ids }),
+    onSuccess: () => { toast.success('Assigned staff updated'); invalidate() },
+    onError: (e) => toast.error(errMsg(e, 'Failed to update assigned staff')),
+  })
+
+  const savedStaffIds = d?.assigned_staff.map((s) => s.id).slice().sort() ?? []
+  const staffDirty = selectedStaffIds !== null
+    && JSON.stringify(selectedStaffIds.slice().sort()) !== JSON.stringify(savedStaffIds)
 
   const [showRenew, setShowRenew] = useState(false)
   const [showSuspend, setShowSuspend] = useState(false)
@@ -107,6 +130,45 @@ export default function DeploymentDetailPage() {
       <div>
         <h1 className="text-xl font-semibold text-text">{d.client_name}</h1>
         <p className="text-sm text-muted font-mono">{d.slug} · {d.base_url ?? 'not yet registered'}</p>
+      </div>
+
+      <div className="bg-surface border border-border rounded-lg p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-text">Assigned Staff</h3>
+          {staffDirty && (
+            <div className="flex gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setSelectedStaffIds(savedStaffIds)}>Cancel</Button>
+              <Button
+                size="sm" loading={assignStaffMutation.isPending}
+                onClick={() => selectedStaffIds && assignStaffMutation.mutate(selectedStaffIds)}
+              >
+                Save
+              </Button>
+            </div>
+          )}
+        </div>
+        <p className="text-xs text-muted mb-3">
+          Ticket and renewal/upgrade-request alerts for this deployment go only to staff checked here.
+          Leave nothing checked to notify every fleet staff member instead (the default).
+        </p>
+        <div className="flex flex-wrap gap-x-6 gap-y-2">
+          {(staffOptions ?? []).map((s) => (
+            <label key={s.id} className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={selectedStaffIds?.includes(s.id) ?? false}
+                onChange={(e) => {
+                  setSelectedStaffIds((prev) => {
+                    const base = prev ?? []
+                    return e.target.checked ? [...base, s.id] : base.filter((id) => id !== s.id)
+                  })
+                }}
+              />
+              {s.full_name || s.username}
+            </label>
+          ))}
+          {staffOptions?.length === 0 && <p className="text-sm text-muted">No staff accounts yet.</p>}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
