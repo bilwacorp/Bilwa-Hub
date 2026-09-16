@@ -158,6 +158,85 @@ class DeploymentSnapshot(Base):
     deployment: Mapped["Deployment"] = relationship("Deployment", back_populates="snapshots")
 
 
+class DeploymentActionExecutionStatus(str, enum.Enum):
+    """HUB-Expansion.md Phase 12's four states, distinguishing "the approval
+    succeeded" (WorkflowInstance.status == completed, see workflow/models.py)
+    from "the deferred call to the deployment actually succeeded" — the gap
+    where the app previously showed nothing but an application log line.
+    Values map 1:1 to the doc's own naming: pending=EXECUTION_PENDING,
+    executing=EXECUTING, executed=EXECUTED, failed=EXECUTION_FAILED."""
+    pending = "pending"
+    executing = "executing"
+    executed = "executed"
+    failed = "failed"
+
+
+class DeploymentActionAttemptStatus(str, enum.Enum):
+    success = "success"
+    failure = "failure"
+
+
+class DeploymentActionExecution(Base):
+    """One row per gated deployment action (renew/suspend/change_plan) that
+    has an approval instance — created the moment the approval is requested
+    (app/approvals/deployment_hooks.py's request_or_execute), independently
+    of whether/when it's ever approved, so an operator can find "what's
+    waiting to execute" before anyone has acted on it. idempotency_key
+    (`hub-action-{workflow_instance_id}`, per HUB-Expansion.md Phase 13) is
+    sent as X-Idempotency-Key on every attempt including retries — see
+    services/deployment_client.py — but the real backstop against a
+    duplicate execution is local: `status` only ever leaves `executed`
+    through a fresh row, never through a retry (see deployment_hooks.py's
+    _execute, which no-ops a retry against an already-`executed` row)."""
+    __tablename__ = "deployment_action_executions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workflow_instance_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("workflow_instances.id", ondelete="CASCADE"), unique=True, nullable=False)
+    deployment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("deployments.id"), nullable=False)
+    action_key: Mapped[str] = mapped_column(String(50), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    # Copied from the WorkflowInstance at creation time so every
+    # OperationalEvent this row's attempts emit can share it without an
+    # extra join back to workflow_instances on every retry.
+    correlation_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    status: Mapped[DeploymentActionExecutionStatus] = mapped_column(
+        Enum(DeploymentActionExecutionStatus), default=DeploymentActionExecutionStatus.pending, nullable=False,
+    )
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_attempted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_response: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    deployment: Mapped["Deployment"] = relationship("Deployment")
+    attempts: Mapped[list["DeploymentActionAttempt"]] = relationship(
+        "DeploymentActionAttempt", back_populates="execution", cascade="all, delete-orphan",
+        order_by="DeploymentActionAttempt.attempt_number",
+    )
+
+
+class DeploymentActionAttempt(Base):
+    """One row per attempt at executing a DeploymentActionExecution — the
+    "retry history" HUB-Expansion.md Phase 12 asks for. triggered_by is
+    NULL for the automatic first attempt (fired by the completion hook the
+    moment the approval completes) and set to the acting staff member's id
+    for every manual retry (POST .../action-executions/{id}/retry)."""
+    __tablename__ = "deployment_action_attempts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    execution_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("deployment_action_executions.id", ondelete="CASCADE"), nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[DeploymentActionAttemptStatus] = mapped_column(Enum(DeploymentActionAttemptStatus), nullable=False)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    response: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    triggered_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    finished_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    execution: Mapped["DeploymentActionExecution"] = relationship("DeploymentActionExecution", back_populates="attempts")
+
+
 class SupportTicketStatus(str, enum.Enum):
     open = "open"
     in_progress = "in_progress"

@@ -5,8 +5,8 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, field_serializer, field_validator
 
 from app.models import (
-    DeploymentStatus, MaintenanceWindowStatus, NotificationChannel, NotificationStatus, OperationalEventStatus,
-    SupportTicketStatus,
+    DeploymentActionAttemptStatus, DeploymentActionExecutionStatus, DeploymentStatus, MaintenanceWindowStatus,
+    NotificationChannel, NotificationStatus, OperationalEventStatus, SupportTicketStatus,
 )
 
 # How hard an active maintenance window bites (MaintenanceWindow.mode):
@@ -494,3 +494,37 @@ class OperationalEventOut(BaseModel):
 class OperationalEventListResponse(BaseModel):
     total: int
     items: List[OperationalEventOut]
+
+
+# ── deployment action executions (HUB-Expansion.md Phase 12/13) ───────────
+
+class DeploymentActionAttemptOut(BaseModel):
+    id: uuid.UUID
+    attempt_number: int
+    status: DeploymentActionAttemptStatus
+    error: Optional[str]
+    response: Optional[dict]
+    triggered_by: Optional[uuid.UUID]
+    started_at: datetime
+    finished_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class DeploymentActionExecutionOut(BaseModel):
+    id: uuid.UUID
+    workflow_instance_id: uuid.UUID
+    deployment_id: uuid.UUID
+    action_key: str
+    idempotency_key: str
+    correlation_id: Optional[uuid.UUID]
+    status: DeploymentActionExecutionStatus
+    attempt_count: int
+    last_attempted_at: Optional[datetime]
+    last_error: Optional[str]
+    last_response: Optional[dict]
+    created_at: datetime
+    updated_at: datetime
+    attempts: List[DeploymentActionAttemptOut] = []
+
+    model_config = {"from_attributes": True}

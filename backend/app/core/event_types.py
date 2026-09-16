@@ -83,3 +83,7 @@ WORKFLOW_CANCELLED = "workflow.cancelled"
 # that resolved to zero live candidates, see workflow/executor.py) is a
 # real terminal state the doc's own catalog omitted.
 WORKFLOW_ERRORED = "workflow.errored"
+
+# ── deployment action execution retries (HUB-Expansion.md Phase 12/13 —
+# see app/models.py's DeploymentActionExecution) ───────────────────────────
+DEPLOYMENT_ACTION_RETRIED = "deployment.action_retried"

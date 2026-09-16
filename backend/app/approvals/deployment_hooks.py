@@ -3,7 +3,7 @@ change-plan) touch the workflow/approval engine — everything else about
 SpiffWorkflow and the rule engine stays behind app/approvals/integration.py's
 seam. Imported once from app/main.py purely for its module-load-time side
 effect (hooks.register_completion_hook) — nothing here is called directly
-except request_or_execute, from api/routers/deployments.py.
+except request_or_execute and retry_execution, from api/routers/deployments.py.
 
 Whether an action is "gated" is inferred from whether an active, published
 WorkflowDefinition exists for its key — this hub has no separate
@@ -11,17 +11,36 @@ AppSetting toggle table, so migration 012's seeded (and admin-editable)
 `deployment_renew`/`deployment_suspend`/`deployment_change_plan`
 definitions double as the on/off switch: deactivate or unpublish one and
 that action goes back to running immediately.
+
+HUB-Expansion.md Phase 12/13: previously, once an approval completed, the
+real deployment_client call ran synchronously inside the SAME request that
+approved the task, and a failure was only ever `logger.warning`'d — the
+approving staff member's HTTP response showed a successful workflow
+instance with no indication the actual call to the deployment failed.
+DeploymentActionExecution (app/models.py) now tracks that call's own state
+(pending/executing/executed/failed) independently of the approval's own
+state, with attempt history and a retry endpoint
+(POST /deployments/{id}/action-executions/{id}/retry) — see retry_execution
+below. The call itself is still made synchronously (within the approve
+request, or within the retry request); this fixes the "invisible failure"
+gap, not the separate "should this be dispatched to Celery instead"
+question, which is deliberately out of scope here.
 """
 import logging
 import uuid
-from typing import Any, Awaitable, Callable, Dict
+from datetime import datetime
+from typing import Any, Awaitable, Callable, Dict, Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.approvals import hooks, integration
 from app.core import event_types as et
-from app.models import Deployment, OperationalEventStatus, User
+from app.models import (
+    Deployment, DeploymentActionAttempt, DeploymentActionAttemptStatus, DeploymentActionExecution,
+    DeploymentActionExecutionStatus, OperationalEventStatus, User,
+)
 from app.services import deployment_client
 from app.services.events import record_event
 from app.workflow import repositories as workflow_repositories
@@ -42,6 +61,18 @@ _EVENT_TYPES = {
     RENEW_KEY: (et.DEPLOYMENT_RENEW_REQUESTED, et.DEPLOYMENT_RENEW_EXECUTED, et.DEPLOYMENT_RENEW_FAILED),
     SUSPEND_KEY: (et.DEPLOYMENT_SUSPEND_REQUESTED, et.DEPLOYMENT_SUSPEND_EXECUTED, et.DEPLOYMENT_SUSPEND_FAILED),
     CHANGE_PLAN_KEY: (et.DEPLOYMENT_CHANGE_PLAN_REQUESTED, et.DEPLOYMENT_CHANGE_PLAN_EXECUTED, et.DEPLOYMENT_CHANGE_PLAN_FAILED),
+}
+
+# key -> the actual deployment_client call, given (deployment, variables,
+# idempotency_key). Keeping this as data (rather than three near-identical
+# completion-hook functions) is what lets _execute() below be one function
+# shared by retry and by every action's completion hook.
+_CLIENT_CALLS: Dict[str, Callable[[Deployment, Dict[str, Any], str], Awaitable[dict]]] = {
+    RENEW_KEY: lambda d, v, idem: deployment_client.renew(
+        d, new_expiry_date=v["new_expiry_date"], renewal_amount=v.get("renewal_amount"), idempotency_key=idem,
+    ),
+    SUSPEND_KEY: lambda d, v, idem: deployment_client.suspend(d, reason=v.get("reason") or "", idempotency_key=idem),
+    CHANGE_PLAN_KEY: lambda d, v, idem: deployment_client.change_plan(d, new_plan_id=v["new_plan_id"], idempotency_key=idem),
 }
 
 
@@ -65,9 +96,10 @@ async def request_or_execute(
 
     Either way, exactly one correlation_id is generated for this call and
     threaded through every OperationalEvent it causes — the gated path
-    stores it on the WorkflowInstance (see integration.start_approval) so
-    the later approve/execute events can find it again; the immediate path
-    just reuses it directly since everything happens in this one call."""
+    stores it on the WorkflowInstance and the new DeploymentActionExecution
+    row (see integration.start_approval) so the later approve/execute/retry
+    events can find it again; the immediate path just reuses it directly
+    since everything happens in this one call."""
     requested_type, executed_type, failed_type = _EVENT_TYPES[key]
     correlation_id = uuid.uuid4()
     if await _is_gated(db, key):
@@ -76,16 +108,30 @@ async def request_or_execute(
             business_object_type=key, business_object_id=deployment.id, variables=variables,
             correlation_id=correlation_id, deployment_id=deployment.id,
         )
+        execution = DeploymentActionExecution(
+            workflow_instance_id=instance.id, deployment_id=deployment.id, action_key=key,
+            idempotency_key=f"hub-action-{instance.id}", correlation_id=correlation_id,
+        )
+        db.add(execution)
+        await db.flush()
         record_event(
             db, event_type=requested_type, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF, actor_id=current_user.id,
             entity_type=et.ENTITY_DEPLOYMENT, entity_id=deployment.id, deployment_id=deployment.id,
             correlation_id=correlation_id, status=OperationalEventStatus.pending,
             metadata={"instance_id": str(instance.id), "variables": {k: v for k, v in variables.items() if k != "summary"}},
         )
+        # An instance can already be terminal by the time we get here (the
+        # "no human tasks, auto-approved on start" edge case — see
+        # integration.start_approval's docstring) — in that case its
+        # completion hook (_on_gated_action_complete below) already ran
+        # _execute() before this function regains control, so `execution`
+        # may already be executed/failed here, not just pending.
         return {
             "approval_required": True,
             "instance_id": str(instance.id),
             "instance_code": instance.instance_code,
+            "execution_id": str(execution.id),
+            "execution_status": execution.status.value,
             "status": instance.status.value,
             "message": (
                 "Approval requested — this action will run once approved."
@@ -115,86 +161,110 @@ async def _variables_map(db: AsyncSession, instance_id) -> Dict[str, Any]:
     return {r.name: r.value for r in rows}
 
 
-def _record_execution_result(
-    db: AsyncSession, *, key: str, instance: WorkflowInstance, deployment: Deployment, error: Exception | None,
-) -> None:
-    """Emits the domain-specific executed/failed event once the completion
-    hook actually knows the outcome of the deferred deployment_client call
-    — the generic approval.approved event (approvals/hooks.py's
-    fire_if_terminal) only records that the *approval* succeeded, which is
-    a different, earlier fact than whether the call it unblocked actually
-    reached the deployment. See HUB-Expansion.md Phase 12: this doesn't
-    fix the underlying "approved but execution failed" gap (still just
-    logged, no retry, no EXECUTION_PENDING/EXECUTING state) — it only
-    makes the failure visible in the event log instead of only in
-    application logs."""
-    _, executed_type, failed_type = _EVENT_TYPES[key]
-    if error is None:
+async def _execute(db: AsyncSession, execution: DeploymentActionExecution, *, triggered_by: Optional[uuid.UUID]) -> None:
+    """Runs (or re-runs) the deferred deployment_client call for one
+    DeploymentActionExecution. This is the one place that call actually
+    happens — both the automatic first attempt (from a completion hook,
+    triggered_by=None) and every manual retry (retry_execution below) go
+    through here, so they get identical state transitions, attempt
+    logging, and idempotency-key handling.
+
+    A no-op (HUB-Expansion.md Phase 13: "never blindly repeat money-moving
+    actions") if `execution.status` is already `executing` (an attempt is
+    already in flight — callers are expected to have already checked this,
+    this is belt-and-suspenders) or `executed` (already succeeded)."""
+    if execution.status in (DeploymentActionExecutionStatus.executing, DeploymentActionExecutionStatus.executed):
+        return
+    deployment = await db.get(Deployment, execution.deployment_id)
+    if deployment is None:
+        return
+    variables = await _variables_map(db, execution.workflow_instance_id)
+
+    execution.status = DeploymentActionExecutionStatus.executing
+    execution.attempt_count += 1
+    execution.last_attempted_at = datetime.utcnow()
+    await db.flush()
+
+    started_at = execution.last_attempted_at
+    attempt_number = execution.attempt_count
+    call = _CLIENT_CALLS[execution.action_key]
+    _, executed_type, failed_type = _EVENT_TYPES[execution.action_key]
+    actor_type = et.ACTOR_STAFF if triggered_by else et.ACTOR_SYSTEM
+    source = et.SOURCE_HUB if triggered_by else et.SOURCE_ENGINE
+    correlation_id = execution.correlation_id or execution.id
+
+    try:
+        response = await call(deployment, variables, execution.idempotency_key)
+    except deployment_client.DeploymentCallError as e:
+        execution.status = DeploymentActionExecutionStatus.failed
+        execution.last_error = str(e)
+        db.add(DeploymentActionAttempt(
+            execution_id=execution.id, attempt_number=attempt_number, status=DeploymentActionAttemptStatus.failure,
+            error=str(e), triggered_by=triggered_by, started_at=started_at, finished_at=datetime.utcnow(),
+        ))
         record_event(
-            db, event_type=executed_type, source=et.SOURCE_ENGINE, actor_type=et.ACTOR_SYSTEM,
+            db, event_type=failed_type, source=source, actor_type=actor_type, actor_id=triggered_by,
             entity_type=et.ENTITY_DEPLOYMENT, entity_id=deployment.id, deployment_id=deployment.id,
-            correlation_id=instance.correlation_id or instance.id, status=OperationalEventStatus.success,
-            metadata={"instance_id": str(instance.id)},
+            correlation_id=correlation_id, status=OperationalEventStatus.failure,
+            metadata={"execution_id": str(execution.id), "attempt": attempt_number, "error": str(e)},
+        )
+        logger.warning(
+            "Deployment action %s (execution %s, attempt %d) failed to reach deployment %s",
+            execution.action_key, execution.id, attempt_number, deployment.id, exc_info=True,
         )
     else:
+        execution.status = DeploymentActionExecutionStatus.executed
+        execution.last_error = None
+        execution.last_response = response
+        db.add(DeploymentActionAttempt(
+            execution_id=execution.id, attempt_number=attempt_number, status=DeploymentActionAttemptStatus.success,
+            response=response, triggered_by=triggered_by, started_at=started_at, finished_at=datetime.utcnow(),
+        ))
         record_event(
-            db, event_type=failed_type, source=et.SOURCE_ENGINE, actor_type=et.ACTOR_SYSTEM,
+            db, event_type=executed_type, source=source, actor_type=actor_type, actor_id=triggered_by,
             entity_type=et.ENTITY_DEPLOYMENT, entity_id=deployment.id, deployment_id=deployment.id,
-            correlation_id=instance.correlation_id or instance.id, status=OperationalEventStatus.failure,
-            metadata={"instance_id": str(instance.id), "error": str(error)},
+            correlation_id=correlation_id, status=OperationalEventStatus.success,
+            metadata={"execution_id": str(execution.id), "attempt": attempt_number},
         )
+    await db.flush()
 
 
-async def _on_renew_complete(db: AsyncSession, instance: WorkflowInstance) -> None:
-    if instance.status != InstanceStatus.completed:
-        return
-    deployment = await db.get(Deployment, instance.business_object_id)
-    if deployment is None:
-        return
-    variables = await _variables_map(db, instance.id)
-    try:
-        await deployment_client.renew(
-            deployment, new_expiry_date=variables["new_expiry_date"], renewal_amount=variables.get("renewal_amount"),
+async def get_execution_for_instance(db: AsyncSession, workflow_instance_id: uuid.UUID) -> Optional[DeploymentActionExecution]:
+    return (await db.execute(
+        select(DeploymentActionExecution).where(DeploymentActionExecution.workflow_instance_id == workflow_instance_id)
+    )).scalar_one_or_none()
+
+
+async def retry_execution(db: AsyncSession, current_user: User, execution: DeploymentActionExecution) -> DeploymentActionExecution:
+    """Called from api/routers/deployments.py's retry endpoint
+    (ACTIONS_RETRY-gated). Only a `failed` execution may be retried — not
+    `pending` (nothing approved yet), `executing` (already in flight), or
+    `executed` (already succeeded; retrying it would risk the exact
+    duplicate-execution Phase 13 warns against)."""
+    if execution.status != DeploymentActionExecutionStatus.failed:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Only a failed execution can be retried (current status: {execution.status.value}).",
         )
-    except deployment_client.DeploymentCallError as e:
-        logger.warning("Approved renew for deployment %s failed to reach the deployment", deployment.id, exc_info=True)
-        _record_execution_result(db, key=RENEW_KEY, instance=instance, deployment=deployment, error=e)
-    else:
-        _record_execution_result(db, key=RENEW_KEY, instance=instance, deployment=deployment, error=None)
+    record_event(
+        db, event_type=et.DEPLOYMENT_ACTION_RETRIED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF,
+        actor_id=current_user.id, entity_type=et.ENTITY_DEPLOYMENT, entity_id=execution.deployment_id,
+        deployment_id=execution.deployment_id, correlation_id=execution.correlation_id or execution.id,
+        metadata={"execution_id": str(execution.id), "attempt": execution.attempt_count + 1},
+    )
+    await _execute(db, execution, triggered_by=current_user.id)
+    return execution
 
 
-async def _on_suspend_complete(db: AsyncSession, instance: WorkflowInstance) -> None:
+async def _on_gated_action_complete(db: AsyncSession, instance: WorkflowInstance) -> None:
     if instance.status != InstanceStatus.completed:
         return
-    deployment = await db.get(Deployment, instance.business_object_id)
-    if deployment is None:
+    execution = await get_execution_for_instance(db, instance.id)
+    if execution is None:
         return
-    variables = await _variables_map(db, instance.id)
-    try:
-        await deployment_client.suspend(deployment, reason=variables.get("reason") or "")
-    except deployment_client.DeploymentCallError as e:
-        logger.warning("Approved suspend for deployment %s failed to reach the deployment", deployment.id, exc_info=True)
-        _record_execution_result(db, key=SUSPEND_KEY, instance=instance, deployment=deployment, error=e)
-    else:
-        _record_execution_result(db, key=SUSPEND_KEY, instance=instance, deployment=deployment, error=None)
+    await _execute(db, execution, triggered_by=None)
 
 
-async def _on_change_plan_complete(db: AsyncSession, instance: WorkflowInstance) -> None:
-    if instance.status != InstanceStatus.completed:
-        return
-    deployment = await db.get(Deployment, instance.business_object_id)
-    if deployment is None:
-        return
-    variables = await _variables_map(db, instance.id)
-    try:
-        await deployment_client.change_plan(deployment, new_plan_id=variables["new_plan_id"])
-    except deployment_client.DeploymentCallError as e:
-        logger.warning("Approved change-plan for deployment %s failed to reach the deployment", deployment.id, exc_info=True)
-        _record_execution_result(db, key=CHANGE_PLAN_KEY, instance=instance, deployment=deployment, error=e)
-    else:
-        _record_execution_result(db, key=CHANGE_PLAN_KEY, instance=instance, deployment=deployment, error=None)
-
-
-hooks.register_completion_hook(RENEW_KEY, _on_renew_complete)
-hooks.register_completion_hook(SUSPEND_KEY, _on_suspend_complete)
-hooks.register_completion_hook(CHANGE_PLAN_KEY, _on_change_plan_complete)
+hooks.register_completion_hook(RENEW_KEY, _on_gated_action_complete)
+hooks.register_completion_hook(SUSPEND_KEY, _on_gated_action_complete)
+hooks.register_completion_hook(CHANGE_PLAN_KEY, _on_gated_action_complete)

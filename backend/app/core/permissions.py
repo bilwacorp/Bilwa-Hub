@@ -125,6 +125,10 @@ APPROVALS_ACT_ANY = ("approvals", "act_any")   # act on a task you're not a cand
 EVENTS_VIEW = ("events", "view")
 EVENTS_VIEW_ALL = ("events", "view_all")
 
+# ── retrying a failed deployment action execution (HUB-Expansion.md Phase
+# 12 — see app/models.py's DeploymentActionExecution) ───────────────────────
+ACTIONS_RETRY = ("actions", "retry")
+
 # (resource, action, description) — the migration-seeded catalog. Order
 # here is also the order the admin UI's checkbox grid renders in within
 # each resource's group.
@@ -176,6 +180,7 @@ ALL_PERMISSIONS: list[tuple[str, str, str]] = [
     (*APPROVALS_ACT_ANY, "Approve or reject any pending task, not just ones you're a candidate for"),
     (*EVENTS_VIEW, "View the operational event log for deployments assigned to you (non-deployment events are always visible)"),
     (*EVENTS_VIEW_ALL, "View the operational event log for every deployment"),
+    (*ACTIONS_RETRY, "Retry a deployment action whose execution failed after approval"),
 ]
 
 

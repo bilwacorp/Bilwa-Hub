@@ -352,3 +352,36 @@ export interface OperationalEventListResponse {
   total: number
   items: OperationalEvent[]
 }
+
+// ── deployment action executions (HUB-Expansion.md Phase 12/13) ───────────
+
+export type DeploymentActionExecutionStatus = 'pending' | 'executing' | 'executed' | 'failed'
+export type DeploymentActionAttemptStatus = 'success' | 'failure'
+
+export interface DeploymentActionAttempt {
+  id: string
+  attempt_number: number
+  status: DeploymentActionAttemptStatus
+  error: string | null
+  response: Record<string, unknown> | null
+  triggered_by: string | null
+  started_at: string
+  finished_at: string
+}
+
+export interface DeploymentActionExecution {
+  id: string
+  workflow_instance_id: string
+  deployment_id: string
+  action_key: string
+  idempotency_key: string
+  correlation_id: string | null
+  status: DeploymentActionExecutionStatus
+  attempt_count: number
+  last_attempted_at: string | null
+  last_error: string | null
+  last_response: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+  attempts: DeploymentActionAttempt[]
+}

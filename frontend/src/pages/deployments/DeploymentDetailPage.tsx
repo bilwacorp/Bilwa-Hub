@@ -11,7 +11,7 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Modal } from '../../components/ui/Modal'
 import { Badge } from '../../components/ui/Badge'
-import type { Deployment, StaffOption } from '../../types'
+import type { Deployment, DeploymentActionExecution, StaffOption } from '../../types'
 
 // Money actions (renew/suspend/change-plan) run immediately, unless a
 // published approval workflow is configured for that action (see backend's
@@ -51,6 +51,19 @@ function HealthRow({ label, ok, latencyMs }: { label: string; ok: boolean; laten
       </span>
     </div>
   )
+}
+
+const EXECUTION_STATUS_VARIANT: Record<DeploymentActionExecution['status'], 'amber' | 'blue' | 'green' | 'red'> = {
+  pending: 'amber',
+  executing: 'blue',
+  executed: 'green',
+  failed: 'red',
+}
+
+// action_key is the workflow definition key ("deployment_renew") — strip
+// the "deployment_" prefix and underscore-case for a human label.
+function actionLabel(actionKey: string): string {
+  return actionKey.replace(/^deployment_/, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 export default function DeploymentDetailPage() {
@@ -139,6 +152,27 @@ export default function DeploymentDetailPage() {
     onError: (e) => toast.error(errMsg(e, 'Failed to reach deployment')),
   })
   const health = healthCheckMutation.data
+
+  // HUB-Expansion.md Phase 12/13: a completed approval no longer implies
+  // the deferred call to the deployment actually succeeded — this list is
+  // where "approved but execution failed" becomes visible, with a retry
+  // action for the ones that are.
+  const { data: executions } = useQuery({
+    queryKey: ['action-executions', deploymentId],
+    queryFn: () => api.get<DeploymentActionExecution[]>(`/deployments/${deploymentId}/action-executions`).then((r) => r.data),
+    refetchInterval: 30_000,
+  })
+  const retryMutation = useMutation({
+    mutationFn: (executionId: string) =>
+      api.post<DeploymentActionExecution>(`/deployments/${deploymentId}/action-executions/${executionId}/retry`).then((r) => r.data),
+    onSuccess: (data) => {
+      toast[data.status === 'executed' ? 'success' : 'error'](
+        data.status === 'executed' ? 'Retry succeeded' : `Retry failed: ${data.last_error ?? 'unknown error'}`,
+      )
+      qc.invalidateQueries({ queryKey: ['action-executions', deploymentId] })
+    },
+    onError: (e) => toast.error(errMsg(e, 'Failed to retry')),
+  })
 
   if (!d) return <div className="p-6 text-muted">Loading…</div>
 
@@ -250,6 +284,43 @@ export default function DeploymentDetailPage() {
         {can('deployments.extend_expiry') && <Button variant="secondary" onClick={() => setShowExtend(true)}>Extend Expiry</Button>}
         {can('deployments.suspend') && <Button variant="danger" onClick={() => setShowSuspend(true)}>Suspend</Button>}
       </div>
+
+      {executions && executions.length > 0 && (
+        <div className="bg-surface border border-border rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-text mb-1">Action Executions</h3>
+          <p className="text-xs text-muted mb-3">
+            An approved renew/suspend/change-plan action runs against the deployment separately from the approval
+            itself — a row here can show "failed" even though its approval shows "approved."
+          </p>
+          <div className="space-y-2">
+            {executions.map((e) => (
+              <div key={e.id} className="border border-border rounded p-3 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-text">{actionLabel(e.action_key)}</span>
+                    <Badge variant={EXECUTION_STATUS_VARIANT[e.status]}>{e.status}</Badge>
+                  </div>
+                  <div className="text-xs text-muted mt-1">
+                    {e.attempt_count} attempt{e.attempt_count === 1 ? '' : 's'}
+                    {e.last_attempted_at ? ` · last attempted ${formatDate(e.last_attempted_at)}` : ''}
+                  </div>
+                  {e.status === 'failed' && e.last_error && (
+                    <div className="text-xs text-danger mt-1">{e.last_error}</div>
+                  )}
+                </div>
+                {e.status === 'failed' && can('actions.retry') && (
+                  <Button
+                    size="sm" variant="secondary" icon={<RotateCw size={13} />}
+                    loading={retryMutation.isPending} onClick={() => retryMutation.mutate(e.id)}
+                  >
+                    Retry
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {snap && (
         <div className="bg-surface border border-border rounded-lg p-4">

@@ -17,19 +17,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import event_types as et
 from app.core.config import settings
 from app.core.permissions import (
-    DEPLOYMENTS_ASSIGN_STAFF, DEPLOYMENTS_CHANGE_PLAN, DEPLOYMENTS_CHECK_HEALTH, DEPLOYMENTS_CREATE,
+    ACTIONS_RETRY, DEPLOYMENTS_ASSIGN_STAFF, DEPLOYMENTS_CHANGE_PLAN, DEPLOYMENTS_CHECK_HEALTH, DEPLOYMENTS_CREATE,
     DEPLOYMENTS_EXTEND_EXPIRY, DEPLOYMENTS_RENEW, DEPLOYMENTS_REVIEW_REQUEST, DEPLOYMENTS_SUSPEND,
     DEPLOYMENTS_VIEW, DEPLOYMENTS_VIEW_ALL, has_permission, require_permission,
 )
 from app.db.session import get_db
 from app.models import (
-    Deployment, DeploymentSnapshot, DeploymentStaffAssignment, DeploymentStatus, MaintenanceWindow,
-    OperationalEventStatus, User,
+    Deployment, DeploymentActionAttempt, DeploymentActionExecution, DeploymentSnapshot, DeploymentStaffAssignment,
+    DeploymentStatus, MaintenanceWindow, OperationalEventStatus, User,
 )
 from app.schemas import (
-    ChangePlanActionRequest, DeploymentCreate, DeploymentCreateOut, DeploymentListResponse,
-    DeploymentOut, DeploymentSnapshotOut, DeploymentStaffAssignRequest, ExtendExpiryActionRequest,
-    ReissueTokenOut, RenewActionRequest, StaffOptionOut, SubscriptionRequestReviewAction, SuspendActionRequest,
+    ChangePlanActionRequest, DeploymentActionAttemptOut, DeploymentActionExecutionOut, DeploymentCreate,
+    DeploymentCreateOut, DeploymentListResponse, DeploymentOut, DeploymentSnapshotOut, DeploymentStaffAssignRequest,
+    ExtendExpiryActionRequest, ReissueTokenOut, RenewActionRequest, StaffOptionOut, SubscriptionRequestReviewAction,
+    SuspendActionRequest,
 )
 from app.approvals import deployment_hooks
 from app.services import deployment_client
@@ -93,6 +94,27 @@ async def _to_out(
     if assigned_staff_map is not None:
         out.assigned_staff = assigned_staff_map.get(d.id, [])
     return out
+
+
+async def _execution_out(db: AsyncSession, execution: DeploymentActionExecution) -> DeploymentActionExecutionOut:
+    """Builds the response from explicit column values rather than
+    `DeploymentActionExecutionOut.model_validate(execution)` — that would
+    make Pydantic read `execution.attempts` too (it's a declared schema
+    field), which is a lazy-loaded relationship this codebase never
+    triggers implicitly (see workflow/repositories.py's list_*_for_instance
+    functions, which always query explicitly instead)."""
+    attempts = (await db.execute(
+        select(DeploymentActionAttempt).where(DeploymentActionAttempt.execution_id == execution.id)
+        .order_by(DeploymentActionAttempt.attempt_number)
+    )).scalars().all()
+    return DeploymentActionExecutionOut(
+        id=execution.id, workflow_instance_id=execution.workflow_instance_id, deployment_id=execution.deployment_id,
+        action_key=execution.action_key, idempotency_key=execution.idempotency_key,
+        correlation_id=execution.correlation_id, status=execution.status, attempt_count=execution.attempt_count,
+        last_attempted_at=execution.last_attempted_at, last_error=execution.last_error,
+        last_response=execution.last_response, created_at=execution.created_at, updated_at=execution.updated_at,
+        attempts=[DeploymentActionAttemptOut.model_validate(a) for a in attempts],
+    )
 
 
 async def _get_visible_or_404(db: AsyncSession, deployment_id: str, current_user: User) -> Deployment:
@@ -368,3 +390,36 @@ async def review_subscription_request(
         status=OperationalEventStatus.success, metadata={"request_id": request_id, "review_status": body.status},
     )
     return result
+
+
+# ── deployment action executions (HUB-Expansion.md Phase 12/13 — see
+# app/approvals/deployment_hooks.py) ────────────────────────────────────────
+
+@router.get("/{deployment_id}/action-executions", response_model=list[DeploymentActionExecutionOut])
+async def list_action_executions(
+    deployment_id: str, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_VIEW)),
+):
+    d = await _get_visible_or_404(db, deployment_id, current_user)
+    rows = (await db.execute(
+        select(DeploymentActionExecution).where(DeploymentActionExecution.deployment_id == d.id)
+        .order_by(DeploymentActionExecution.created_at.desc())
+    )).scalars().all()
+    return [await _execution_out(db, e) for e in rows]
+
+
+@router.post("/{deployment_id}/action-executions/{execution_id}/retry", response_model=DeploymentActionExecutionOut)
+async def retry_action_execution(
+    deployment_id: str, execution_id: str, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*ACTIONS_RETRY)),
+):
+    d = await _get_visible_or_404(db, deployment_id, current_user)
+    execution = (await db.execute(
+        select(DeploymentActionExecution).where(
+            DeploymentActionExecution.id == execution_id, DeploymentActionExecution.deployment_id == d.id,
+        )
+    )).scalar_one_or_none()
+    if execution is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Execution not found")
+    execution = await deployment_hooks.retry_execution(db, current_user, execution)
+    return await _execution_out(db, execution)

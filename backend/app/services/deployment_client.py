@@ -24,17 +24,30 @@ class DeploymentCallError(Exception):
     pass
 
 
-async def _call(deployment: Deployment, method: str, path: str, json: Optional[dict] = None) -> dict:
+async def _call(
+    deployment: Deployment, method: str, path: str, json: Optional[dict] = None, *, idempotency_key: Optional[str] = None,
+) -> dict:
     if not deployment.base_url:
         raise DeploymentCallError("Deployment has no base_url on file")
     if not deployment.action_key_encrypted:
         raise DeploymentCallError("Deployment has not completed registration yet (no action_key)")
     action_key = crypto.decrypt(deployment.action_key_encrypted)
 
+    headers = {"X-Hub-Api-Key": action_key}
+    if idempotency_key:
+        # HUB-Expansion.md Phase 13 — sent on every retryable gated action
+        # (see app/approvals/deployment_hooks.py) so a deployment that
+        # understands this header can reject/dedupe a retried call itself.
+        # A deployment that ignores it is unaffected — this is additive,
+        # not a required contract change to PoultryOS-CBP's
+        # hub_integration.py. Local dedup (never re-firing an already-
+        # `executed` DeploymentActionExecution) is the real backstop.
+        headers["X-Idempotency-Key"] = idempotency_key
+
     url = f"{deployment.base_url.rstrip('/')}/api/v1/hub{path}"
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-            resp = await client.request(method, url, headers={"X-Hub-Api-Key": action_key}, json=json)
+            resp = await client.request(method, url, headers=headers, json=json)
     except httpx.HTTPError as e:
         # Transport-level failure (DNS, connection refused, timeout) — not an
         # HTTP error response, so it never reaches the status_code check
@@ -48,19 +61,24 @@ async def _call(deployment: Deployment, method: str, path: str, json: Optional[d
     return resp.json()
 
 
-async def renew(deployment: Deployment, *, new_expiry_date: str, renewal_amount: Optional[float] = None) -> dict:
+async def renew(
+    deployment: Deployment, *, new_expiry_date: str, renewal_amount: Optional[float] = None,
+    idempotency_key: Optional[str] = None,
+) -> dict:
     body: dict[str, Any] = {"new_expiry_date": new_expiry_date}
     if renewal_amount is not None:
         body["renewal_amount"] = renewal_amount
-    return await _call(deployment, "POST", "/subscription/renew", body)
+    return await _call(deployment, "POST", "/subscription/renew", body, idempotency_key=idempotency_key)
 
 
-async def suspend(deployment: Deployment, *, reason: str) -> dict:
-    return await _call(deployment, "POST", "/subscription/suspend", {"reason": reason})
+async def suspend(deployment: Deployment, *, reason: str, idempotency_key: Optional[str] = None) -> dict:
+    return await _call(deployment, "POST", "/subscription/suspend", {"reason": reason}, idempotency_key=idempotency_key)
 
 
-async def change_plan(deployment: Deployment, *, new_plan_id: str) -> dict:
-    return await _call(deployment, "POST", "/subscription/change-plan", {"new_plan_id": new_plan_id})
+async def change_plan(deployment: Deployment, *, new_plan_id: str, idempotency_key: Optional[str] = None) -> dict:
+    return await _call(
+        deployment, "POST", "/subscription/change-plan", {"new_plan_id": new_plan_id}, idempotency_key=idempotency_key,
+    )
 
 
 async def extend_expiry(deployment: Deployment, *, new_expiry_date: str) -> dict:
