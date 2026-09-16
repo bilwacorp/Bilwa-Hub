@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes, Link, useLocation } from 'react-router-dom'
-import { LayoutGrid, Ticket, CalendarClock, LogOut, Users } from 'lucide-react'
+import { LayoutGrid, Ticket, CalendarClock, LogOut, Users, Bell } from 'lucide-react'
 import { useAuthStore } from './stores/auth'
 import api from './lib/api'
 import LoginPage from './pages/auth/LoginPage'
@@ -8,6 +8,7 @@ import DeploymentDetailPage from './pages/deployments/DeploymentDetailPage'
 import SupportTicketsPage from './pages/tickets/SupportTicketsPage'
 import MaintenanceWindowsPage from './pages/maintenance/MaintenanceWindowsPage'
 import StaffUsersPage from './pages/users/StaffUsersPage'
+import NotificationsPage from './pages/notifications/NotificationsPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -29,6 +30,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     { to: '/deployments', label: 'Deployments', icon: LayoutGrid },
     { to: '/tickets', label: 'Support Tickets', icon: Ticket },
     { to: '/maintenance-windows', label: 'Maintenance', icon: CalendarClock },
+    { to: '/notifications', label: 'Notifications', icon: Bell },
     ...(role === 'admin' ? [{ to: '/users', label: 'Staff', icon: Users }] : []),
   ]
   return (
@@ -66,6 +68,7 @@ export default function App() {
       <Route path="/deployments/:deploymentId" element={<RequireAuth><Shell><DeploymentDetailPage /></Shell></RequireAuth>} />
       <Route path="/tickets" element={<RequireAuth><Shell><SupportTicketsPage /></Shell></RequireAuth>} />
       <Route path="/maintenance-windows" element={<RequireAuth><Shell><MaintenanceWindowsPage /></Shell></RequireAuth>} />
+      <Route path="/notifications" element={<RequireAuth><Shell><NotificationsPage /></Shell></RequireAuth>} />
       <Route path="/users" element={<RequireAuth><RequireAdmin><Shell><StaffUsersPage /></Shell></RequireAdmin></RequireAuth>} />
       <Route path="*" element={<Navigate to="/deployments" replace />} />
     </Routes>

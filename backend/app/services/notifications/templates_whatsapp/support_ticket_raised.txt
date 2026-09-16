@@ -1,0 +1,4 @@
+{{ company_name }}: new support ticket from {{ client_name }} — {{ ticket_subject }} ({{ priority }} priority).
+{% if ticket_url %}
+View: {{ ticket_url }}
+{% endif %}

@@ -40,6 +40,56 @@ class Settings(BaseSettings):
     HEARTBEAT_STALE_HOURS: int = 4
     HEARTBEAT_OFFLINE_HOURS: int = 8
 
+    # ── notifications (services/notifications/) ────────────────────────────
+    # Celery broker/backend — a dedicated Redis DB index (1), separate from
+    # nothing else in this app today (REDIS_URL/index 0 is the Casbin
+    # watcher's best-effort pub/sub, which degrades gracefully without
+    # Redis; Celery's broker is NOT optional — no worker can pick up a task
+    # without it reachable).
+    CELERY_BROKER_URL: str = "redis://localhost:6379/1"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
+
+    # Global kill switches — env-only (no admin-UI toggle in this phase,
+    # unlike PoultryPro-CBF's DB-backed AppSetting toggle). Both on by
+    # default; WHATSAPP_NOTIFICATIONS_ENABLED is a narrower switch layered
+    # underneath NOTIFICATIONS_ENABLED — both must be true for a WhatsApp
+    # send to actually enqueue (see services/notifications/service.py).
+    NOTIFICATIONS_ENABLED: bool = True
+    WHATSAPP_NOTIFICATIONS_ENABLED: bool = True
+
+    # SMTP — any standard relay (self-hosted Postal, Hostinger/Titan, Gmail,
+    # ...), nothing here is provider-specific. See
+    # services/notifications/README.md for setup examples.
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    # true for implicit TLS from the first byte (port 465) — takes priority
+    # over SMTP_TLS when set.
+    SMTP_USE_SSL: bool = False
+    # true to upgrade via STARTTLS after a plaintext connect (port 587/25).
+    # Ignored when SMTP_USE_SSL is true.
+    SMTP_TLS: bool = True
+    SMTP_TIMEOUT_SECONDS: int = 15
+    FROM_EMAIL: str = "alerts@bilwacorp.example"
+    FROM_NAME: str = "BilwaCorp Fleet Hub"
+    REPLY_TO: str = ""
+
+    # WhatsApp — a generic HTTP gateway adapter (Evolution API, Meta Cloud
+    # API, a Wasapi/Wassenger-style sender, ...). WHATSAPP_PAYLOAD_TEMPLATE
+    # is the piece that actually adapts to your vendor's request shape — see
+    # services/notifications/README.md for per-vendor examples. Empty
+    # WHATSAPP_API_URL (default) leaves the channel unconfigured: sends fail
+    # fast with a clear error instead of silently no-opping.
+    WHATSAPP_API_URL: str = ""
+    WHATSAPP_API_METHOD: str = "POST"
+    WHATSAPP_API_KEY: str = ""
+    WHATSAPP_AUTH_HEADER: str = "Authorization"
+    WHATSAPP_AUTH_SCHEME: str = "Bearer"
+    WHATSAPP_EXTRA_HEADERS: str = ""
+    WHATSAPP_PAYLOAD_TEMPLATE: str = '{"to": "{{ to }}", "message": {{ message | tojson }}}'
+    WHATSAPP_TIMEOUT_SECONDS: int = 15
+
     class Config:
         env_file = ".env"
         extra = "ignore"

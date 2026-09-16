@@ -16,14 +16,20 @@ relayed from each deployment and tracks maintenance windows across the
 fleet.
 
 This is **Phase 1**: registration, heartbeat, inbound actions, support
-tickets, maintenance windows. No per-device sessions, no notification
-emails from the hub itself. See `README.md`'s "What's deliberately NOT in
-Phase 1" and the original design plan quoted there for the full rationale.
+tickets, maintenance windows. No per-device sessions. See `README.md`'s
+"What's deliberately NOT in Phase 1" and the original design plan quoted
+there for the full rationale.
 
 Staff user management + two roles (`admin`, `engineer`) landed after
 Phase 1 as a small follow-on — see "The permission model" below. There is
 still no general permission *catalog*/roles UI: the two roles and what
 each one grants are hardcoded, not admin-configurable.
+
+Email + WhatsApp staff notifications (a support ticket raised, a
+renewal/upgrade request raised) landed after that — see
+`services/notifications/` below. Unlike the Phase-1 plan's original "no
+notification emails from the hub itself" scoping, this is now a real,
+Celery-backed subsystem (`celery-worker`/`redis` in `docker-compose.yml`).
 
 **Connecting a new client deployment to this hub is a full runbook of its
 own — see `docs/CONNECTING_A_DEPLOYMENT.md` before doing this for real.**
@@ -55,16 +61,20 @@ npm run build    # tsc + vite build
 ```
 
 ### Whole stack (Docker)
-`docker-compose.yml` (`backend` + `frontend`, DB external) is the Dokploy
-deploy unit — see README's "Deploying (Dokploy)" for env vars and network
-setup. `frontend`'s nginx serves the SPA and proxies `/api` to the backend
-via the `hub-api-internal` alias on a private network, so it's one origin
-(the auth cookie is `SameSite=Lax; Path=/api` — cross-origin would break
-it) and `backend` never needs its own public domain. `backend` is also on
-`dokploy-network` to reach the managed Postgres, with an entrypoint
-route-fix (`backend/docker-entrypoint.sh`, ported from PoultryOS-CBP) so
-its outbound calls to client deployments aren't blackholed — same dual-
-network gotcha this host has.
+`docker-compose.yml` (`redis` + `backend` + `celery-worker` + `frontend`, DB
+external) is the Dokploy deploy unit — see README's "Deploying (Dokploy)"
+for env vars and network setup. `frontend`'s nginx serves the SPA and
+proxies `/api` to the backend via the `hub-api-internal` alias on a private
+network, so it's one origin (the auth cookie is `SameSite=Lax; Path=/api`
+— cross-origin would break it) and `backend` never needs its own public
+domain. `backend` is also on `dokploy-network` to reach the managed
+Postgres, with an entrypoint route-fix (`backend/docker-entrypoint.sh`,
+ported from PoultryOS-CBP) so its outbound calls to client deployments
+aren't blackholed — same dual-network gotcha this host has. `celery-worker`
+(same image, same entrypoint/network setup as `backend` since it makes its
+own outbound SMTP/WhatsApp-gateway calls) renders and sends every
+`services/notifications/` alert; `redis` is its broker, internal to
+`hub_internal` only.
 
 URLs: Backend `http://localhost:8000/api/v1` (no `/docs` Swagger check done
 yet — verify it's enabled the same way PoultryOS-CBP's is if you need it).
@@ -131,6 +141,21 @@ services/deployment_client.py
                       this mirrors. Catches transport-level failures (DNS, connection
                       refused) as DeploymentCallError, not a raw httpx exception, so callers
                       get a clean 502 instead of an opaque 500.
+services/notifications/ Email (SMTP) + WhatsApp (generic HTTP gateway) staff alerts, ported
+                      from PoultryPro-CBF's package of the same name — see its own README.md
+                      for full architecture/setup. NotificationService.send_* creates a
+                      NotificationLog row and enqueues a Celery task (celery-worker container)
+                      that does the actual render+send; nothing sends inline on the request
+                      thread. No DB-editable templates here (unlike PoultryPro-CBF) —
+                      templates/ + templates_whatsapp/ are file-based only.
+services/notification_triggers.py
+                      Where the two Phase-2 events are wired in: a support ticket raised
+                      (ingest.py's ingest_support_ticket) and a subscription renewal/upgrade
+                      request raised (ingest.py's ingest_heartbeat — pending_requests arrives
+                      as the deployment's full current list every heartbeat, so this diffs
+                      against the prior snapshot to find genuinely new requests). Fans out to
+                      every active user holding FLEET_MANAGE (admin + engineer) with an email
+                      and/or phone (User.phone) on file.
 api/routers/
   auth.py             login/logout/refresh/me — MFA, phone/WhatsApp OTP, and mobile
                       refresh-token pairing all dropped (ported subset only)
@@ -146,6 +171,8 @@ api/routers/
                       delete — MaintenanceWindow.created_by FKs to users.id) + role
                       assignment. Guards against self-lockout (can't deactivate/change your
                       own role) and against dropping the last active admin.
+  notifications.py      FLEET_MANAGE: notification history (list/detail/resend/delete) +
+                      test-email/test-whatsapp — see services/notifications/README.md.
 ```
 
 ### Frontend — `frontend/src/`
@@ -168,6 +195,9 @@ pages/maintenance/MaintenanceWindowsPage.tsx list + create/edit, no automation
 pages/users/StaffUsersPage.tsx               admin-only: staff table (role/active inline
                                               editors, reset-password), "Staff" nav item in
                                               App.tsx's Shell only renders for role='admin'
+pages/notifications/NotificationsPage.tsx    notification history table (filter by status/
+                                              channel/recipient), resend/delete, test-email/
+                                              test-whatsapp buttons
 ```
 
 ### The permission model (admin / engineer)
@@ -240,8 +270,9 @@ lives in a Celery-beat task on the *deployment* side
 | `DATABASE_URL` | Postgres, async driver |
 | `SECRET_KEY` | JWT signing key (staff login) |
 | `HUB_ENCRYPTION_KEY` | **Required.** Fernet key for `action_key` encryption — the hub cannot run its inbound-action feature without it |
-| `REDIS_URL` | Casbin cross-worker policy sync (`core/casbin_watcher.py`) |
+| `REDIS_URL` | Casbin cross-worker policy sync (`core/casbin_watcher.py`) — optional, degrades gracefully without it |
 | `BACKEND_CORS_ORIGINS` | This hub's own frontend origin(s) |
-| `FRONTEND_URL` | This hub's own frontend URL — not request-routing related, kept for parity with PoultryOS-CBP's Settings shape |
+| `FRONTEND_URL` | This hub's own frontend URL — used to build the deployment-detail link embedded in notification emails/WhatsApp messages (`services/notification_triggers.py`) |
+| `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | **Required for notifications.** Unlike `REDIS_URL` above, this is a real dependency — no email/WhatsApp alert sends without the `celery-worker` container reaching it. See `services/notifications/README.md` for this + the `SMTP_*`/`FROM_*`/`WHATSAPP_*`/`NOTIFICATIONS_ENABLED` variables. |
 
 Frontend env: `VITE_API_BASE_URL`.

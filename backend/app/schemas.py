@@ -4,7 +4,9 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, field_serializer, field_validator
 
-from app.models import DeploymentStatus, MaintenanceWindowStatus, SupportTicketStatus
+from app.models import (
+    DeploymentStatus, MaintenanceWindowStatus, NotificationChannel, NotificationStatus, SupportTicketStatus,
+)
 
 # How hard an active maintenance window bites (MaintenanceWindow.mode):
 #   banner    — in-app notice only
@@ -68,6 +70,9 @@ class StaffUserCreate(BaseModel):
     username: str
     full_name: Optional[str] = None
     email: Optional[str] = None
+    # E.164-ish WhatsApp recipient (see core/phone.py) — optional; a staff
+    # user with no phone on file simply never gets a WhatsApp alert.
+    phone: Optional[str] = None
     password: str
     role: StaffRole
 
@@ -75,6 +80,7 @@ class StaffUserCreate(BaseModel):
 class StaffUserUpdate(BaseModel):
     full_name: Optional[str] = None
     email: Optional[str] = None
+    phone: Optional[str] = None
     is_active: Optional[bool] = None
     role: Optional[StaffRole] = None
 
@@ -84,6 +90,7 @@ class StaffUserOut(BaseModel):
     username: str
     full_name: Optional[str]
     email: Optional[str]
+    phone: Optional[str] = None
     is_active: bool
     role: Optional[StaffRole] = None
     created_at: datetime
@@ -341,3 +348,40 @@ class MaintenanceWindowOut(BaseModel):
 class MaintenanceWindowListResponse(BaseModel):
     total: int
     items: List[MaintenanceWindowOut]
+
+
+# ── notifications ────────────────────────────────────────────────────────
+
+class NotificationLogOut(BaseModel):
+    id: uuid.UUID
+    channel: NotificationChannel
+    provider: str
+    recipient: str
+    subject: Optional[str]
+    template: Optional[str]
+    status: NotificationStatus
+    error_message: Optional[str]
+    retry_count: int
+    sent_at: Optional[datetime]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class NotificationLogListResponse(BaseModel):
+    total: int
+    items: List[NotificationLogOut]
+
+
+class NotificationSendResponse(BaseModel):
+    notification_id: uuid.UUID
+    status: NotificationStatus
+
+
+class TestEmailRequest(BaseModel):
+    recipient: str
+
+
+class TestWhatsAppRequest(BaseModel):
+    recipient: str
+    message: str = "This is a test message from BilwaCorp Fleet Hub."

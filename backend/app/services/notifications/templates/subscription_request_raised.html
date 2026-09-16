@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}New subscription request{% endblock %}
+{% block content %}
+<h1 style="margin:0 0 16px; font-size:20px; color:#16213E;">New {{ request_type.replace('_', ' ') }} request</h1>
+<p style="margin:0 0 16px; font-size:15px; line-height:1.6;">
+  <strong>{{ client_name }}</strong> submitted a {{ request_type.replace('_', ' ') }} request{% if requested_plan_name %} for the <strong>{{ requested_plan_name }}</strong> plan{% endif %}.
+</p>
+{% if message %}
+<p style="margin:0 0 16px; font-size:14px; color:#555555; font-style:italic; white-space:pre-wrap;">"{{ message }}"</p>
+{% endif %}
+{% if deployment_url %}
+<table role="presentation" cellpadding="0" cellspacing="0">
+  <tr>
+    <td style="border-radius:6px; background-color:#16213E;">
+      <a href="{{ deployment_url }}" style="display:inline-block; padding:12px 24px; font-size:14px; font-weight:600; color:#FFFFFF; text-decoration:none;">Review request</a>
+    </td>
+  </tr>
+</table>
+{% endif %}
+{% endblock %}

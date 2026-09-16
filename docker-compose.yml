@@ -17,6 +17,17 @@
 #                  managed Postgres, and Traefik can reach `frontend`.
 
 services:
+  # Celery broker/result-backend for services/notifications/ (email +
+  # WhatsApp staff alerts). Internal to hub_internal only — never reachable
+  # from dokploy-network, no public port. Ephemeral: losing this container's
+  # data loses only in-flight/queued sends, which stay `pending` in
+  # notification_logs and can be resent via POST /notifications/resend/{id}.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - hub_internal
+
   backend:
     build:
       context: ./backend
@@ -45,8 +56,19 @@ services:
       - LOG_LEVEL=INFO
       - BACKEND_CORS_ORIGINS=["${HUB_PUBLIC_URL:-http://localhost}"]
       - FRONTEND_URL=${HUB_PUBLIC_URL:-http://localhost}
+      # services/notifications/ — the backend process only ever *publishes*
+      # tasks to this broker (NotificationService.send_*'s .delay() calls);
+      # celery-worker (below) is what actually renders/sends. Dedicated
+      # Redis DB index (1) — separate from nothing else today, but keeps
+      # Celery's keys out of any future use of index 0.
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - NOTIFICATIONS_ENABLED=${NOTIFICATIONS_ENABLED:-true}
+      - WHATSAPP_NOTIFICATIONS_ENABLED=${WHATSAPP_NOTIFICATIONS_ENABLED:-true}
     # Dockerfile CMD runs `alembic upgrade head` before uvicorn — don't
     # override command.
+    depends_on:
+      - redis
     networks:
       hub_internal:
         priority: 1000
@@ -57,6 +79,69 @@ services:
         # `api-internal` — see frontend/nginx.conf.
         aliases:
           - hub-api-internal
+      dokploy-network:
+        priority: 100
+
+  # Renders + sends every email/WhatsApp alert services/notifications/
+  # enqueues (support ticket raised, subscription renewal/upgrade request
+  # raised, ...) — see backend/app/services/notifications/README.md. Same
+  # image as `backend`, same dual-network + NET_ADMIN + entrypoint route fix
+  # (docker-entrypoint.sh) because it makes its own outbound SMTP/WhatsApp-
+  # gateway calls, hitting the same "dokploy-network silently blackholes
+  # outbound" gotcha `backend` has for its deployment callbacks. Does NOT
+  # run `alembic upgrade head` — only `backend`'s CMD does that.
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    command: celery -A app.services.notifications.tasks:celery_app worker --loglevel=info
+    environment:
+      - DATABASE_URL=${DATABASE_URL:?set DATABASE_URL to the managed Postgres}
+      - DB_SSL_MODE=${DB_SSL_MODE:-disable}
+      - SECRET_KEY=${SECRET_KEY:?set SECRET_KEY in the Environment tab}
+      - HUB_ENCRYPTION_KEY=${HUB_ENCRYPTION_KEY:?generate a Fernet key - see README}
+      - DOKPLOY_NETWORK_SUBNET=${DOKPLOY_NETWORK_SUBNET:?set to dokploy-network's CIDR}
+      - APP_ENV=production
+      - LOG_LEVEL=INFO
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - NOTIFICATIONS_ENABLED=${NOTIFICATIONS_ENABLED:-true}
+      - WHATSAPP_NOTIFICATIONS_ENABLED=${WHATSAPP_NOTIFICATIONS_ENABLED:-true}
+      # SMTP — see services/notifications/README.md for per-provider
+      # examples (Postal, Hostinger/Titan, ...). Set via Dokploy's
+      # Environment tab; SMTP_HOST empty (default) means email sends fail
+      # fast with a clear error instead of silently no-opping.
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_USE_SSL=${SMTP_USE_SSL:-false}
+      - SMTP_TLS=${SMTP_TLS:-true}
+      - SMTP_TIMEOUT_SECONDS=${SMTP_TIMEOUT_SECONDS:-15}
+      - FROM_EMAIL=${FROM_EMAIL:-}
+      - FROM_NAME=${FROM_NAME:-BilwaCorp Fleet Hub}
+      - REPLY_TO=${REPLY_TO:-}
+      # WhatsApp — a generic HTTP gateway adapter, see the README for
+      # per-vendor WHATSAPP_PAYLOAD_TEMPLATE examples. Left entirely to
+      # Dokploy's Environment tab (no inline defaults here) since there's no
+      # sensible generic value for a vendor-specific payload shape; empty
+      # WHATSAPP_API_URL leaves the channel unconfigured either way.
+      - WHATSAPP_API_URL=${WHATSAPP_API_URL}
+      - WHATSAPP_API_METHOD=${WHATSAPP_API_METHOD:-POST}
+      - WHATSAPP_API_KEY=${WHATSAPP_API_KEY}
+      - WHATSAPP_AUTH_HEADER=${WHATSAPP_AUTH_HEADER:-Authorization}
+      - WHATSAPP_AUTH_SCHEME=${WHATSAPP_AUTH_SCHEME:-Bearer}
+      - WHATSAPP_EXTRA_HEADERS=${WHATSAPP_EXTRA_HEADERS}
+      - WHATSAPP_PAYLOAD_TEMPLATE=${WHATSAPP_PAYLOAD_TEMPLATE}
+      - WHATSAPP_TIMEOUT_SECONDS=${WHATSAPP_TIMEOUT_SECONDS:-15}
+    depends_on:
+      - redis
+    networks:
+      hub_internal:
+        priority: 1000
       dokploy-network:
         priority: 100
 

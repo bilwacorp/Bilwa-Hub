@@ -24,6 +24,11 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     full_name: Mapped[Optional[str]] = mapped_column(String(100))
     email: Mapped[Optional[str]] = mapped_column(String(120), unique=True)
+    # WhatsApp recipient for services/notifications — E.164-ish, see
+    # core/phone.py. Optional: a staff user with no phone on file simply
+    # never gets a WhatsApp send (email-only), same "never block the
+    # caller" posture as a missing email.
+    phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     hashed_password: Mapped[str] = mapped_column(String(128), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Bumped on password change to invalidate every JWT issued before that
@@ -154,3 +159,42 @@ class MaintenanceWindow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     deployment: Mapped[Optional["Deployment"]] = relationship("Deployment")
+
+
+class NotificationChannel(str, enum.Enum):
+    email = "email"
+    whatsapp = "whatsapp"
+
+
+class NotificationStatus(str, enum.Enum):
+    pending = "pending"    # log row created, not yet handed to a channel
+    sending = "sending"    # Celery task picked it up, provider call in flight
+    sent = "sent"
+    failed = "failed"
+    cancelled = "cancelled"  # a kill switch (settings.NOTIFICATIONS_ENABLED /
+                              # WHATSAPP_NOTIFICATIONS_ENABLED) was off — the
+                              # attempt is still recorded, never silently dropped
+
+
+class NotificationLog(Base):
+    """One row per notification attempt — see services/notifications/. Never
+    stores a secret in `payload` (there's no OTP/reset-token template here,
+    but see constants.SENSITIVE_CONTEXT_KEYS for the same defense-in-depth
+    PoultryPro-CBF uses, kept for any future template that needs it)."""
+    __tablename__ = "notification_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    channel: Mapped[NotificationChannel] = mapped_column(Enum(NotificationChannel), nullable=False)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    recipient: Mapped[str] = mapped_column(String(200), nullable=False)
+    subject: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    template: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # JSON-encoded sanitized template context — for display in the admin
+    # notifications list and for resend (see services/notifications/repository.py).
+    payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[NotificationStatus] = mapped_column(Enum(NotificationStatus), default=NotificationStatus.pending, nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

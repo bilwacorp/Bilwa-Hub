@@ -5,6 +5,7 @@ client-supplied deployment_id (see the plan's correction #4)."""
 from datetime import datetime
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_deployment_from_api_key
@@ -14,6 +15,9 @@ from app.schemas import (
     HeartbeatRequest, HeartbeatResponse, MaintenanceWindowPublic, SupportTicketIngest,
 )
 from app.services.maintenance_query import active_windows_for
+from app.services.notification_triggers import (
+    new_pending_requests, notify_subscription_request_raised, notify_support_ticket_raised,
+)
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
@@ -24,6 +28,17 @@ async def ingest_heartbeat(
     db: AsyncSession = Depends(get_db),
     deployment: Deployment = Depends(get_deployment_from_api_key),
 ):
+    # Fetched *before* inserting the new snapshot below — this is the diff
+    # base new_pending_requests() compares the incoming list against, to
+    # find requests that are genuinely new rather than still-pending ones
+    # carried over from the last heartbeat (see notification_triggers.py).
+    previous = (await db.execute(
+        select(DeploymentSnapshot.pending_requests)
+        .where(DeploymentSnapshot.deployment_id == deployment.id)
+        .order_by(DeploymentSnapshot.received_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+
     sub = body.subscription
     snapshot = DeploymentSnapshot(
         deployment_id=deployment.id,
@@ -40,6 +55,9 @@ async def ingest_heartbeat(
     )
     db.add(snapshot)
     await db.flush()
+
+    for request in new_pending_requests(previous, body.pending_requests):
+        await notify_subscription_request_raised(db, request, deployment)
 
     # The heartbeat response carries this deployment's maintenance windows —
     # a self-healing resync in case a hub->deployment push was missed.
@@ -65,4 +83,5 @@ async def ingest_support_ticket(
     db.add(ticket)
     await db.flush()
     await db.refresh(ticket)
+    await notify_support_ticket_raised(db, ticket, deployment)
     return {"ticket_id": str(ticket.id)}

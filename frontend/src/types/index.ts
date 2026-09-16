@@ -105,6 +105,7 @@ export interface StaffUser {
   username: string
   full_name: string | null
   email: string | null
+  phone: string | null
   is_active: boolean
   role: StaffRole | null
   created_at: string
@@ -113,4 +114,28 @@ export interface StaffUser {
 export interface StaffUserListResponse {
   total: number
   items: StaffUser[]
+}
+
+// ── notifications ───────────────────────────────────────────────────────
+
+export type NotificationChannel = 'email' | 'whatsapp'
+export type NotificationStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'cancelled'
+
+export interface NotificationLog {
+  id: string
+  channel: NotificationChannel
+  provider: string
+  recipient: string
+  subject: string | null
+  template: string | null
+  status: NotificationStatus
+  error_message: string | null
+  retry_count: number
+  sent_at: string | null
+  created_at: string
+}
+
+export interface NotificationLogListResponse {
+  total: number
+  items: NotificationLog[]
 }

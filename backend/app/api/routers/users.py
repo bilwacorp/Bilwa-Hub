@@ -51,7 +51,7 @@ async def list_users(db: AsyncSession = Depends(get_db)):
 @router.post("", response_model=StaffUserOut, status_code=201)
 async def create_user(body: StaffUserCreate, db: AsyncSession = Depends(get_db)):
     user = User(
-        username=body.username, full_name=body.full_name, email=body.email,
+        username=body.username, full_name=body.full_name, email=body.email, phone=body.phone,
         hashed_password=get_password_hash(body.password),
     )
     db.add(user)
@@ -77,7 +77,7 @@ async def update_user(user_id: uuid.UUID, body: StaffUserUpdate, db: AsyncSessio
     if losing_admin and await rbac.count_active_admins(db) <= 1:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot remove the last active admin")
 
-    for field in ("full_name", "email", "is_active"):
+    for field in ("full_name", "email", "phone", "is_active"):
         value = getattr(body, field)
         if value is not None:
             setattr(user, field, value)

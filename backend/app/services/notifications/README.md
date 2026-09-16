@@ -1,0 +1,171 @@
+# Notifications
+
+Alerts BilwaCorp staff (every user holding the `admin` or `engineer` role —
+see `recipients.py`) by email and WhatsApp when a fleet event needs their
+attention: a support ticket is raised, or a client deployment reports a
+pending renewal/upgrade request. Ported from PoultryPro-CBF's own
+`services/notifications/` package, trimmed to this hub's two triggers, two
+roles, and (deliberately) no DB-editable template UI — see "Differences from
+PoultryPro-CBF" below.
+
+## Architecture
+
+```
+NotificationService (service.py)
+    -> repository.py                  creates a NotificationLog row (status=pending)
+    -> tasks.send_email_task.delay(...)      enqueues a Celery task, returns immediately
+    -> tasks.send_whatsapp_task.delay(...)   (WhatsApp channel — same pattern)
+
+Celery worker (tasks.py, docker-compose.yml's celery-worker service)
+    -> render.py               renders the Jinja2 template -> (html, text) / text
+    -> providers/smtp.py       sends via aiosmtplib, raises typed exceptions on failure
+    -> providers/whatsapp.py   POSTs to your configured gateway, raises typed exceptions on failure
+    -> repository.py           updates NotificationLog: sending -> sent | failed
+```
+
+Nothing in this package ever sends a message inline on the request thread.
+Business code should only ever import `NotificationService` (via the
+`get_notification_service` FastAPI dependency, or directly as done by
+`app/services/notification_triggers.py`) — never a provider or `tasks.py`.
+
+## Triggers
+
+`app/services/notification_triggers.py` is where the two Phase-2 events are
+wired to this package:
+
+- `notify_support_ticket_raised` — called from
+  `api/routers/ingest.py`'s `ingest_support_ticket`, right after the
+  `SupportTicket` row is created.
+- `notify_subscription_request_raised` — called from `ingest.py`'s
+  `ingest_heartbeat`. `pending_requests` arrives as this deployment's *full
+  current list* on every heartbeat, not an event — the trigger diffs the
+  incoming list's request `id`s against the immediately-preceding snapshot's
+  to find ones that are genuinely new, so an unchanged pending request
+  doesn't re-notify every 2 hours.
+
+Both fan out to every active `fleet_staff()` recipient (`recipients.py`):
+one email per recipient with an email on file, one WhatsApp message per
+recipient with a phone on file (`User.phone`, set from the Staff page).
+
+Adding a third trigger (a new template) is: a new `TEMPLATE_*` constant in
+`constants.py`, a `templates/<key>.html` + `templates_whatsapp/<key>.txt`
+pair, a `send_*_alert`/`send_*_whatsapp` convenience method on
+`NotificationService`, and a call site in `notification_triggers.py` (or
+directly on `NotificationService` wherever the event happens) — business
+code never touches `tasks.py` or a provider directly.
+
+## Setup
+
+1. Set the SMTP env vars below in `backend/.env` (any standard SMTP server —
+   self-hosted Postal, Hostinger/Titan, Gmail, ...).
+2. Run Redis + the Celery worker alongside the API — both are already wired
+   into `docker-compose.yml` (`redis`, `celery-worker`). Local dev:
+   `celery -A app.services.notifications.tasks:celery_app worker --loglevel=info`
+   (needs a local Redis; `CELERY_BROKER_URL`/`CELERY_RESULT_BACKEND` default
+   to `redis://localhost:6379/1`).
+3. Send yourself a test email as staff: `POST /api/v1/notifications/test-email`
+   with `{"recipient": "you@example.com"}`.
+
+**Example — Hostinger/Titan mail:**
+```
+SMTP_HOST=smtp.hostinger.com
+SMTP_PORT=465
+SMTP_USE_SSL=true
+SMTP_TLS=false
+SMTP_USERNAME=you@yourdomain.com
+SMTP_PASSWORD=your-mailbox-password
+FROM_EMAIL=you@yourdomain.com
+```
+
+**Example — Postal (typically port 25 or 587 with STARTTLS):**
+```
+SMTP_HOST=postal.yourdomain.com
+SMTP_PORT=587
+SMTP_TLS=true
+SMTP_USE_SSL=false
+```
+
+## WhatsApp setup
+
+`providers/whatsapp.py` doesn't know about any specific vendor — it POSTs a
+Jinja2-rendered JSON body to `WHATSAPP_API_URL` with an auth header, both
+fully driven by Settings.
+
+**Example — Evolution API** (`POST /message/sendText/{instance}`, header `apikey: <token>`, no `Bearer` prefix):
+```
+WHATSAPP_API_URL=https://evolution.yourdomain.com/message/sendText/your-instance
+WHATSAPP_AUTH_HEADER=apikey
+WHATSAPP_AUTH_SCHEME=
+WHATSAPP_API_KEY=your-evolution-api-key
+WHATSAPP_PAYLOAD_TEMPLATE={"number": "{{ to }}", "text": {{ message | tojson }}}
+```
+
+**Example — Meta WhatsApp Cloud API:**
+```
+WHATSAPP_API_URL=https://graph.facebook.com/v20.0/<phone-number-id>/messages
+WHATSAPP_AUTH_HEADER=Authorization
+WHATSAPP_AUTH_SCHEME=Bearer
+WHATSAPP_API_KEY=your-meta-permanent-or-system-user-token
+WHATSAPP_PAYLOAD_TEMPLATE={"messaging_product": "whatsapp", "to": "{{ to }}", "type": "text", "text": {"body": {{ message | tojson }}}}
+```
+
+If your gateway needs a header beyond the single auth one (e.g. an instance
+ID), set `WHATSAPP_EXTRA_HEADERS` to a JSON object string, e.g.
+`{"X-Instance-Id": "abc123"}` — merged on top of the auth header.
+
+A staff user only receives WhatsApp alerts once they have a phone number on
+file (Staff page → edit → Phone) — a missing phone just means "email only",
+same posture as a missing email.
+
+## Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `NOTIFICATIONS_ENABLED` | Global kill switch — `false` stops every channel. Still logs the attempt as `cancelled`, never silently drops it. |
+| `WHATSAPP_NOTIFICATIONS_ENABLED` | Narrower switch scoped to WhatsApp only, layered under the global one. |
+| `SMTP_HOST` / `SMTP_PORT` | SMTP server |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | SMTP credentials |
+| `SMTP_USE_SSL` | `true` for implicit TLS (port 465). Takes priority over `SMTP_TLS`. |
+| `SMTP_TLS` | `true` for STARTTLS (port 587/25). Ignored when `SMTP_USE_SSL` is true. |
+| `SMTP_TIMEOUT_SECONDS` | Connection timeout |
+| `FROM_EMAIL` / `FROM_NAME` | Default sender identity |
+| `REPLY_TO` | Optional default Reply-To |
+| `WHATSAPP_API_URL` | Gateway send-message endpoint. Empty (default) leaves WhatsApp unconfigured — sends fail fast with a clear error. |
+| `WHATSAPP_API_METHOD` | HTTP method (default `POST`) |
+| `WHATSAPP_API_KEY` / `WHATSAPP_AUTH_HEADER` / `WHATSAPP_AUTH_SCHEME` | Auth header shape |
+| `WHATSAPP_EXTRA_HEADERS` | Optional JSON object string of additional static headers |
+| `WHATSAPP_PAYLOAD_TEMPLATE` | Jinja2 template rendered to the JSON request body |
+| `WHATSAPP_TIMEOUT_SECONDS` | Request timeout |
+| `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | Redis, dedicated DB index (default `redis://redis:6379/1` in compose) — this is a *real* dependency for this feature, unlike `REDIS_URL` (the Casbin watcher's best-effort pub/sub, which degrades gracefully without it) |
+
+## Admin API (`/api/v1/notifications`, FLEET_MANAGE — admin + engineer)
+
+- `GET /notifications` (aliased `/history`) — paginated list, filterable by
+  `status`, `channel`, `recipient`.
+- `GET /notifications/{id}` — detail.
+- `POST /notifications/resend/{id}` — re-enqueues a failed/stuck send.
+- `POST /notifications/test-email` / `POST /notifications/test-whatsapp` —
+  sends a real test message through the configured provider.
+- `DELETE /notifications/{id}` — removes a log entry.
+
+## Security notes
+
+- SMTP/WhatsApp errors never leak credentials — `providers/*.py` only log
+  host/URL on failure, never the password/API key.
+- Recipient addresses are validated (`email_validator`) before every send;
+  WhatsApp recipients against a loose E.164-ish pattern (`core/phone.py`).
+- `NotificationLog.payload` redacts anything in `constants.SENSITIVE_CONTEXT_KEYS`
+  — no current template here passes a secret, but this is the same
+  defense-in-depth PoultryPro-CBF's version of this package uses.
+
+## Differences from PoultryPro-CBF's version of this package
+
+- No `EmailTemplate`/`WhatsAppTemplate` DB tables or template-editor admin
+  UI — templates are file-based only (`templates/`, `templates_whatsapp/`).
+  Editing copy is a code change + deploy, not an in-app edit.
+- No push channel (no mobile app in this hub).
+- Kill switches are env vars (`core/config.py`), not a DB-backed `AppSetting`
+  toggle with its own admin-UI switch.
+- Recipients are resolved by Casbin role (`admin` + `engineer`, i.e.
+  everyone with `FLEET_MANAGE`) rather than a fixed "admins of this tenant"
+  concept — this hub has one flat staff list, not per-deployment admins.

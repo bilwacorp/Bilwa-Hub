@@ -1,0 +1,4 @@
+{{ company_name }}: {{ client_name }} submitted a {{ request_type.replace('_', ' ') }} request{% if requested_plan_name %} for {{ requested_plan_name }}{% endif %}.
+{% if deployment_url %}
+Review: {{ deployment_url }}
+{% endif %}

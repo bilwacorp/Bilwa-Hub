@@ -53,9 +53,12 @@ npm run dev
 
 ## Deploying (Dokploy)
 
-The hub is one `docker-compose.yml` — `backend` + `frontend` (nginx serves
-the SPA and proxies `/api` to the backend on a private network, so it's one
-origin and the auth cookie works). The database is **not** in the stack.
+The hub is one `docker-compose.yml` — `redis` + `backend` + `celery-worker`
++ `frontend` (nginx serves the SPA and proxies `/api` to the backend on a
+private network, so it's one origin and the auth cookie works). `redis` +
+`celery-worker` are the delivery pipeline for `services/notifications/`
+(support-ticket and renewal/upgrade-request staff alerts) — see that
+package's README.md. The database is **not** in the stack.
 
 1. **Create Service → Database → Postgres** in Dokploy. Note its internal
    connection details.
@@ -71,8 +74,14 @@ origin and the auth cookie works). The database is **not** in the stack.
    - `HUB_PUBLIC_URL` — the public URL you'll give this hub
    - `DB_SSL_MODE` — leave unset (defaults to `disable`, right for an
      internal Dokploy DB); set to `require` only if the DB enforces TLS
+   - `SMTP_HOST`/`SMTP_PORT`/`SMTP_USERNAME`/`SMTP_PASSWORD`/`FROM_EMAIL`
+     (+ `WHATSAPP_API_URL` and friends if you also want WhatsApp alerts) —
+     optional at first deploy (staff alerts just stay `pending`/fail until
+     set), see `backend/app/services/notifications/README.md` for the full
+     variable list and per-provider examples
 4. **Domains tab** — add your domain, routed to service **`frontend`**,
-   port **`80`**. Leave `backend` with no domain.
+   port **`80`**. Leave `backend`, `celery-worker`, and `redis` with no
+   domain.
 5. Deploy. `backend` runs `alembic upgrade head` on every start, so the
    schema + seeded admin are created automatically.
 6. Log in with `admin` / `ChangeMe@2026` and **change the password
