@@ -15,8 +15,37 @@ import { Badge } from '../../components/ui/Badge'
 import type { Deployment, StaffOption } from '../../types'
 
 function errMsg(err: unknown, fallback: string) {
-  if (axios.isAxiosError(err)) return (err.response?.data as { detail?: string } | undefined)?.detail || fallback
+  if (!axios.isAxiosError(err)) return fallback
+  const detail = (err.response?.data as { detail?: unknown } | undefined)?.detail
+  // A 422 body's `detail` is FastAPI's list of Pydantic error objects
+  // ({type, loc, msg, ...}), not a string — rendering it directly into a
+  // toast crashes React ("Objects are not valid as a React child"). Every
+  // other error shape this app returns (403/404/409/502) is a plain
+  // string, so only this one needs unwrapping.
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0] as { msg?: string } | undefined
+    return first?.msg || fallback
+  }
   return fallback
+}
+
+// Money actions (renew/suspend/change-plan) run immediately, unless a
+// published approval workflow is configured for that action (see backend's
+// app/approvals/deployment_hooks.py) — then the action route returns this
+// shape instead of executing straight away. successMessage is shown when
+// the action really did run now; approvalMessage covers the gated case.
+interface ActionResult {
+  approval_required?: boolean
+  message?: string
+}
+
+function actionToast(data: ActionResult | undefined, successMessage: string) {
+  if (data?.approval_required) {
+    toast.success(data.message || 'Approval requested — this will run once approved.')
+  } else {
+    toast.success(successMessage)
+  }
 }
 
 interface HealthCheckResult {
@@ -86,22 +115,25 @@ export default function DeploymentDetailPage() {
 
   const renewForm = useForm<{ new_expiry_date: string; renewal_amount?: number }>()
   const renewMutation = useMutation({
-    mutationFn: (v: { new_expiry_date: string; renewal_amount?: number }) => api.post(`/deployments/${deploymentId}/actions/renew`, v),
-    onSuccess: () => { toast.success('Subscription renewed'); setShowRenew(false); invalidate() },
+    mutationFn: (v: { new_expiry_date: string; renewal_amount?: number }) =>
+      api.post<ActionResult>(`/deployments/${deploymentId}/actions/renew`, v).then((r) => r.data),
+    onSuccess: (data) => { actionToast(data, 'Subscription renewed'); setShowRenew(false); invalidate() },
     onError: (e) => toast.error(errMsg(e, 'Failed to renew')),
   })
 
   const suspendForm = useForm<{ reason: string }>()
   const suspendMutation = useMutation({
-    mutationFn: (v: { reason: string }) => api.post(`/deployments/${deploymentId}/actions/suspend`, v),
-    onSuccess: () => { toast.success('Subscription suspended'); setShowSuspend(false); invalidate() },
+    mutationFn: (v: { reason: string }) =>
+      api.post<ActionResult>(`/deployments/${deploymentId}/actions/suspend`, v).then((r) => r.data),
+    onSuccess: (data) => { actionToast(data, 'Subscription suspended'); setShowSuspend(false); invalidate() },
     onError: (e) => toast.error(errMsg(e, 'Failed to suspend')),
   })
 
   const changePlanForm = useForm<{ new_plan_id: string }>()
   const changePlanMutation = useMutation({
-    mutationFn: (v: { new_plan_id: string }) => api.post(`/deployments/${deploymentId}/actions/change-plan`, v),
-    onSuccess: () => { toast.success('Plan changed'); setShowChangePlan(false); invalidate() },
+    mutationFn: (v: { new_plan_id: string }) =>
+      api.post<ActionResult>(`/deployments/${deploymentId}/actions/change-plan`, v).then((r) => r.data),
+    onSuccess: (data) => { actionToast(data, 'Plan changed'); setShowChangePlan(false); invalidate() },
     onError: (e) => toast.error(errMsg(e, 'Failed to change plan')),
   })
 

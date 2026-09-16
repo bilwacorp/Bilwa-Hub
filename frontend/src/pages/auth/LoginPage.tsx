@@ -19,6 +19,8 @@ const LANDING_PAGES: { permission: string; path: string }[] = [
   { permission: 'tickets.view', path: '/tickets' },
   { permission: 'maintenance.view', path: '/maintenance-windows' },
   { permission: 'notifications.view', path: '/notifications' },
+  { permission: 'approvals.view', path: '/approvals' },
+  { permission: 'workflows.view', path: '/workflows' },
   { permission: 'staff.view', path: '/users' },
   { permission: 'rbac.manage', path: '/roles' },
 ]

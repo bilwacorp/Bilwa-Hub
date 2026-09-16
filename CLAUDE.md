@@ -34,6 +34,12 @@ renewal/upgrade request raised) landed after that — see
 notification emails from the hub itself" scoping, this is now a real,
 Celery-backed subsystem (`celery-worker`/`redis` in `docker-compose.yml`).
 
+An embedded BPMN workflow + approval engine (`app/workflow/`, `app/rules/`,
+`app/approvals/`) landed after that, ported from PoultryPro-CBF's own
+engine of the same name — see "The workflow & approval engine" below. It
+gates `deployments.renew`/`.suspend`/`.change_plan` behind an admin-
+configurable approval step instead of running them immediately.
+
 **Connecting a new client deployment to this hub is a full runbook of its
 own — see `docs/CONNECTING_A_DEPLOYMENT.md` before doing this for real.**
 Short version: create a pending `Deployment` + single-use
@@ -211,6 +217,27 @@ api/routers/
   rbac.py               rbac.view (read-only endpoints) / rbac.manage (role CRUD, set a
                       role's permissions) — both admin-only at cutover. See "The
                       permission model" above.
+workflow/              BPMN process shape — WorkflowDefinition/WorkflowVersion (design-time,
+                      services.py) + WorkflowInstance/WorkflowTask/WorkflowHistory/
+                      WorkflowVariable (runtime, executor.py) + the SpiffWorkflow adapter
+                      (engine.py) and BPMN parser/validator (parser.py). api.py is
+                      `/workflows` (definition/version CRUD) + `/workflow-instances`
+                      (read-only + cancel — see "The workflow & approval engine" below for
+                      why there's no direct "start an instance" endpoint).
+rules/                 The routing config that decides who approves each step —
+                      ApprovalRule/RuleCondition/RuleAction, a sandboxed expression
+                      evaluator (evaluator.py, shared with BPMN gateway conditions via
+                      workflow/engine.py's RuleScriptEngine), and resolvers.py (the two
+                      approver-resolution strategies: casbin_role, explicit_users).
+                      api.py is `/workflow-rules`.
+approvals/              The thin glue a business router uses to gate an action:
+                      integration.start_approval (called from api/routers/deployments.py's
+                      action_renew/suspend/change_plan), hooks.py's completion-hook
+                      registry (one-directional — approvals/workflow never imports a
+                      business module), and deployment_hooks.py, the one place
+                      deployments.py's gated routes actually touch this subsystem — see
+                      "The workflow & approval engine" below. api.py is `/approvals`
+                      (the day-to-day approve/reject/reassign inbox surface).
 ```
 
 ### Frontend — `frontend/src/`
@@ -258,6 +285,38 @@ pages/rbac/RolesPage.tsx                     rbac.manage: role list (name/descri
                                               is_system roles get no delete button
 pages/rbac/RolePermissionsPage.tsx           rbac.manage: one checkbox per catalog permission
                                               for a given role, dirty-tracked Save/Reset
+pages/workflows/MyApprovalsPage.tsx          approvals.view/.act: the day-to-day inbox —
+                                              pending tasks assigned/candidate to you (or,
+                                              with approvals.act_any, every pending task),
+                                              approve/reject with an optional comment
+pages/workflows/WorkflowListPage.tsx         workflows.view/.create: definition list, the
+                                              is_active toggle (this IS the on/off switch for
+                                              a gated action — see "The workflow & approval
+                                              engine" below)
+pages/workflows/WorkflowDetailPage.tsx       workflows.view: one definition's versions +
+                                              which approval rules target it
+pages/workflows/WorkflowDesignerPage.tsx     workflows.update/.publish: the bpmn-js visual
+                                              editor for one draft version — see
+                                              designer/BpmnDesigner.tsx
+pages/workflows/designer/                    BpmnDesigner.tsx (bpmn-js Modeler + properties
+                                              panel wrapper), ApprovalPropertiesProvider.tsx
+                                              (custom "Approval routing" properties group:
+                                              stepKey/ruleKey/casbinResource/casbinAction/
+                                              dueInHours — written in plain function calls,
+                                              no JSX, since the panel renders with Preact not
+                                              React), spiffProperties.ts (read/write helpers
+                                              for the <spiffworkflow:properties> extension
+                                              element), spiffworkflowModdle.json (the moddle
+                                              extension schema), blankBpmn.ts (starter
+                                              diagram for a new version) — all ported
+                                              near-verbatim from PoultryPro-CBF's own
+                                              designer/ of the same name, which is generic
+                                              (no branch/module concept in any of these files)
+pages/workflows/ApprovalRulesPage.tsx        workflow_rules.view/.create/.update/.delete:
+                                              rule CRUD — conditions (rule-engine
+                                              expressions) + one action (assign_approver
+                                              w/ casbin_role or explicit_users strategy,
+                                              auto_approve, skip_step, or set_variable)
 
 App.tsx's Shell nav items and route guards (RequirePermission) are gated by
 useAuthStore().can('resource.action') — fed by /auth/me's `permissions`
@@ -266,7 +325,7 @@ field — not by a hardcoded role name (see "The permission model" above).
 
 ### The permission model (roles, permission catalog, row-level visibility)
 
-28 Casbin permissions, all defined in `core/permissions.py`'s
+45 Casbin permissions, all defined in `core/permissions.py`'s
 `ALL_PERMISSIONS` — one per *action*, not one per router. E.g.
 `deployments.renew`, `deployments.suspend`, `deployments.check_health`,
 `deployments.assign_staff` are four separate permissions a role can hold
@@ -274,7 +333,9 @@ independently, gated per-route (`Depends(require_permission(*PERM))` on
 each route function, not one blanket `APIRouter(dependencies=[...])`).
 Full resource list: `deployments` (10 actions incl. `view`/`view_all`),
 `tickets` (3), `maintenance` (5), `notifications` (4), `staff` (4), `rbac`
-(2 — `view`/`manage`).
+(2 — `view`/`manage`), `workflows` (6), `workflow_rules` (5),
+`workflow_instances` (2), `approvals` (4 — see "The workflow & approval
+engine" below for what each of these seventeen gates).
 
 - **`Role`** (`app/models.py`) — dynamic, admin-creatable role *metadata*
   (name, description, `is_system`). `is_system=True` on the two seeded
@@ -341,6 +402,106 @@ password bumps `token_version` (`core/deps.get_current_user` already
 checks it) — but a deactivated user is rejected immediately regardless,
 since `is_active` is re-checked live on every request, not just baked
 into the JWT.
+
+### The workflow & approval engine (read before touching `app/workflow/`, `app/rules/`, `app/approvals/`)
+
+Ported from PoultryPro-CBF's own `workflow`/`rules`/`approvals` packages,
+which run a real embedded BPMN engine (SpiffWorkflow) plus a sandboxed
+expression language (`rule_engine`) for approval routing — not a
+lightweight "N-approvals" gate. This was a deliberate, informed choice:
+before building it, the scope was researched against CBF's actual
+implementation (~5000 lines across backend+frontend) and the user was
+explicitly offered a lighter alternative via `AskUserQuestion` and chose
+the full engine anyway, knowing the size. Don't "simplify" this back down
+to a lightweight gate without that same conversation happening again.
+
+**What's stripped from CBF's version, and why**: this hub is single-org,
+not multi-branch, so every `branch_id` column/param/scoping clause in
+CBF's tables is gone — an instance's visibility is just "hold the right
+permission", not "and only within your branch". The `branch_manager` and
+`linked_supervisor` approver-resolution strategies are gone too (no
+branch-manager or batch/farm-supervisor concept here) — only
+`casbin_role` and `explicit_users` remain (`rules/models.py`'s
+`ApproverStrategy`). CBF's hidden `bilwacorp_engineer` role
+(`workflows.manage_system`) that can still edit a published `is_system`
+workflow/rule has no hub equivalent — here, `is_system=True` simply
+freezes a definition/rule's *structure* for *everyone* once it has a
+published version (`workflow/services.py`'s `_assert_definition_mutable`,
+`rules/services.py`'s `update_rule`); only the `is_active` toggle stays
+editable. Push notifications are gone (email only, via
+`NotificationService.send_approval` — this hub has no mobile app).
+`workflow/executor.py`'s `instance_code` is a random `WF-XXXXXXXX` string
+generated inline, not CBF's `core/idempotency.create_with_code_retry`
+helper (never ported here) — a collision at 4 random bytes isn't worth a
+retry loop at this hub's scale.
+
+**How the gate actually works** (`app/approvals/deployment_hooks.py`):
+`deployments.py`'s `action_renew`/`action_suspend`/`action_change_plan`
+routes call `deployment_hooks.request_or_execute(...)`, which checks
+whether an **active workflow definition with a published version** exists
+for the action's key (`deployment_renew`/`deployment_suspend`/
+`deployment_change_plan`). If not, it runs exactly like before this
+feature existed — calls `deployment_client.renew/suspend/change_plan`
+immediately and returns its raw response. If one exists, it starts a
+workflow instance instead (via `approvals/integration.start_approval`)
+and returns `{"approval_required": true, "instance_id", "status",
+"message"}` — the frontend (`DeploymentDetailPage.tsx`'s `actionToast`)
+checks for this shape and shows "Approval requested" instead of assuming
+the action ran. There is **no separate settings toggle** for "is this
+action gated" — this hub has no `AppSetting` table — the seeded
+definition's own `is_active` flag (and whether it has a published
+version) *is* the switch, editable from the Workflows page with no
+migration needed to turn it off.
+
+Once approved, `deployment_hooks._on_renew_complete` (registered via
+`approvals/hooks.register_completion_hook` at import time — see
+`app/main.py`'s `from app.approvals import deployment_hooks  # noqa`)
+fires and makes the real `deployment_client` call, reading back the
+`new_expiry_date`/`renewal_amount`/`reason`/`new_plan_id` that were seeded
+as `WorkflowVariable` rows when the instance started. A `DeploymentCallError`
+here (deployment unreachable) is caught and logged as a warning, not
+raised — the *approval* already succeeded and committed; a transport
+failure calling the now-approved action back to the deployment is a
+separate, later failure mode (currently: logged only, no retry — a stuck
+`completed` instance whose deployment call failed is visible via
+`GET /workflow-instances/{id}/history`, not yet resurfaced anywhere else).
+
+**Migration `012_workflow_engine.py`** creates all nine workflow/rules
+tables (native Postgres enum types for every status/type column, matching
+`migration 001`'s `DO $$ ... CREATE TYPE ... EXCEPTION$$` convention — do
+NOT switch these to plain `String` columns, the ORM's `Enum(...)` type
+expects a matching native type) and seeds three built-in
+(`is_system=True`), already-published, one-human-step workflow
+definitions — `deployment_renew`/`deployment_suspend`/
+`deployment_change_plan` — each with one `casbin_role`-strategy rule
+routing to the `admin` role. `admin` is granted every new permission;
+`engineer` is granted only `approvals.view`/`approvals.act`/
+`workflow_instances.view` (can act on a task if ever routed to them, and
+see status — not manage workflow/rule config), mirroring migration 011's
+"keep every action permission, not the admin-config ones" pattern.
+
+**BPMN gotchas** (all verified by hand against SpiffWorkflow 3.1.2 — see
+`workflow/engine.py` and `workflow/parser.py`'s own docstrings for the
+full list): a task's routing metadata (`stepKey`, `ruleKey`,
+`casbinResource`, `casbinAction`, `dueInHours`) lives in a custom
+`<spiffworkflow:properties>` extension element, not as plain BPMN
+attributes — `workflow/parser.py`'s `validate_bpmn` rejects any user/manual
+task with no `stepKey` (the executor can't look up a rule without one),
+and rejects `scriptTask`/`preScript`/`postScript` outright (arbitrary code
+execution from admin-authored BPMN is not acceptable — gateway conditions
+instead go through `rule_engine`, a sandboxed grammar with no eval/exec
+path, via `engine.py`'s `RuleScriptEngine`). Element ids `Start`/`End` are
+reserved by SpiffWorkflow's own implicit root/terminal tasks and silently
+drop that element's connections if reused — also checked at validation
+time.
+
+Rule resolution never hardcodes an approver: `workflow/executor.py`'s
+`advance()` looks up a matching `ApprovalRule` for every new human task via
+`rules/services.find_first_matching_rule`, and a step with no matching
+rule (or one that resolves to zero live candidates) moves the whole
+instance to `error` rather than silently stalling forever — a workflow
+stuck with no rule is a configuration bug that should be visible
+immediately, not an approval task nobody can ever act on.
 
 ### The two-credential design (read before touching auth/registration code)
 

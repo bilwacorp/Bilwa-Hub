@@ -13,6 +13,10 @@ TEMPLATE_SUPPORT_TICKET_RAISED = "support_ticket_raised"
 TEMPLATE_SUBSCRIPTION_REQUEST_RAISED = "subscription_request_raised"
 TEMPLATE_SUBSCRIPTION_EXPIRING = "subscription_expiring"
 TEMPLATE_PASSWORD_RESET = "password_reset"
+# app/workflow, app/approvals — sent to each candidate approver when a new
+# WorkflowTask is created (see app/workflow/executor.py's
+# _notify_candidate_approvers).
+TEMPLATE_APPROVAL_REQUESTED = "approval_requested"
 
 # The shared header/footer wrapper every email template extends via
 # {% extends "base.html" %} — never sent standalone, only reachable through

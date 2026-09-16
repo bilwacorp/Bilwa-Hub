@@ -90,6 +90,36 @@ STAFF_RESET_PASSWORD = ("staff", "reset_password")
 RBAC_VIEW = ("rbac", "view")
 RBAC_MANAGE = ("rbac", "manage")              # create/rename/delete roles, edit a role's permissions
 
+# ── workflows (BPMN definitions/versions — the design-time surface) ───────
+# Migration 012. Ported from PoultryPro-CBF's core/permissions.py naming,
+# minus WORKFLOWS_MANAGE_SYSTEM (no hidden bypass role here — is_system is
+# simply frozen for everyone once published) and WORKFLOW_INSTANCES_START
+# (instances only ever start via the deployment-action integration, never a
+# direct "start any workflow" API call — see app/approvals/deployment_hooks.py).
+WORKFLOWS_VIEW = ("workflows", "view")
+WORKFLOWS_CREATE = ("workflows", "create")
+WORKFLOWS_UPDATE = ("workflows", "update")
+WORKFLOWS_PUBLISH = ("workflows", "publish")
+WORKFLOWS_ARCHIVE = ("workflows", "archive")
+WORKFLOWS_DELETE = ("workflows", "delete")
+
+# ── workflow rules (approval routing config) ───────────────────────────────
+WORKFLOW_RULES_VIEW = ("workflow_rules", "view")
+WORKFLOW_RULES_CREATE = ("workflow_rules", "create")
+WORKFLOW_RULES_UPDATE = ("workflow_rules", "update")
+WORKFLOW_RULES_DELETE = ("workflow_rules", "delete")
+WORKFLOW_RULES_TEST = ("workflow_rules", "test")
+
+# ── workflow instances (a running approval against a business object) ─────
+WORKFLOW_INSTANCES_VIEW = ("workflow_instances", "view")
+WORKFLOW_INSTANCES_CANCEL = ("workflow_instances", "cancel")
+
+# ── approvals (acting on a workflow task) ───────────────────────────────────
+APPROVALS_VIEW = ("approvals", "view")
+APPROVALS_ACT = ("approvals", "act")
+APPROVALS_REASSIGN = ("approvals", "reassign")
+APPROVALS_ACT_ANY = ("approvals", "act_any")   # act on a task you're not a candidate/assignee for
+
 # (resource, action, description) — the migration-seeded catalog. Order
 # here is also the order the admin UI's checkbox grid renders in within
 # each resource's group.
@@ -122,6 +152,23 @@ ALL_PERMISSIONS: list[tuple[str, str, str]] = [
     (*STAFF_RESET_PASSWORD, "Reset a staff account's password"),
     (*RBAC_VIEW, "View the permission catalog and roles"),
     (*RBAC_MANAGE, "Create/delete custom roles and change which permissions any role holds"),
+    (*WORKFLOWS_VIEW, "View workflow definitions and their BPMN diagrams"),
+    (*WORKFLOWS_CREATE, "Create a new workflow definition"),
+    (*WORKFLOWS_UPDATE, "Edit a workflow definition or its draft versions"),
+    (*WORKFLOWS_PUBLISH, "Publish a workflow version"),
+    (*WORKFLOWS_ARCHIVE, "Archive a workflow version"),
+    (*WORKFLOWS_DELETE, "Delete a workflow definition"),
+    (*WORKFLOW_RULES_VIEW, "View approval routing rules"),
+    (*WORKFLOW_RULES_CREATE, "Create an approval routing rule"),
+    (*WORKFLOW_RULES_UPDATE, "Edit an approval routing rule"),
+    (*WORKFLOW_RULES_DELETE, "Delete an approval routing rule"),
+    (*WORKFLOW_RULES_TEST, "Test an approval routing rule against sample input"),
+    (*WORKFLOW_INSTANCES_VIEW, "View running/finished workflow instances and their history"),
+    (*WORKFLOW_INSTANCES_CANCEL, "Cancel a running workflow instance"),
+    (*APPROVALS_VIEW, "View the approvals inbox"),
+    (*APPROVALS_ACT, "Approve or reject a task assigned/candidate to you"),
+    (*APPROVALS_REASSIGN, "Reassign a pending approval task to another user"),
+    (*APPROVALS_ACT_ANY, "Approve or reject any pending task, not just ones you're a candidate for"),
 ]
 
 

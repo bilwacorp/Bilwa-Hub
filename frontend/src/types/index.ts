@@ -170,3 +170,159 @@ export interface Role {
   is_system: boolean
   created_at: string
 }
+
+// ── workflow / approval engine ──────────────────────────────────────────
+
+export type WorkflowVersionStatus = 'draft' | 'published' | 'archived'
+export type WorkflowInstanceStatus = 'running' | 'completed' | 'rejected' | 'cancelled' | 'error'
+export type WorkflowTaskStatus = 'pending' | 'approved' | 'rejected' | 'cancelled' | 'skipped'
+
+export interface WorkflowDefinition {
+  id: string
+  key: string
+  name: string
+  description: string | null
+  is_active: boolean
+  is_system: boolean
+  created_by: string | null
+  created_at: string
+}
+
+export interface WorkflowVersionListItem {
+  id: string
+  definition_id: string
+  version: number
+  process_id: string
+  status: WorkflowVersionStatus
+  notes: string | null
+  created_by: string | null
+  created_at: string
+  published_at: string | null
+}
+
+export interface WorkflowVersion extends WorkflowVersionListItem {
+  bpmn_xml: string
+}
+
+export interface ValidationStep {
+  task_id: string
+  name: string | null
+  step_key: string | null
+  rule_key: string | null
+}
+
+export interface ValidationResult {
+  is_valid: boolean
+  errors: string[]
+  steps: ValidationStep[]
+}
+
+export interface WorkflowInstance {
+  id: string
+  instance_code: string
+  definition_id: string
+  version_id: string
+  business_object_type: string
+  business_object_id: string
+  status: WorkflowInstanceStatus
+  result: string | null
+  started_by: string
+  started_at: string
+  completed_at: string | null
+  error_detail: string | null
+}
+
+export interface WorkflowHistoryEntry {
+  id: string
+  instance_id: string
+  task_id: string | null
+  event_type: string
+  actor_user_id: string | null
+  actor_username: string | null
+  from_status: string | null
+  to_status: string | null
+  comment: string | null
+  detail: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface WorkflowVariable {
+  id: string
+  name: string
+  value: unknown
+  value_type: string
+  is_input: boolean
+  updated_at: string
+  updated_by: string | null
+}
+
+export interface WorkflowTask {
+  id: string
+  instance_id: string
+  task_spec_name: string
+  task_name: string | null
+  step_key: string | null
+  status: WorkflowTaskStatus
+  assigned_user_id: string | null
+  candidate_user_ids: string[]
+  rule_id: string | null
+  due_at: string | null
+  acted_by: string | null
+  acted_at: string | null
+  comment: string | null
+  created_at: string
+}
+
+export type RuleActionType = 'assign_approver' | 'auto_approve' | 'skip_step' | 'set_variable'
+export type ApproverStrategy = 'casbin_role' | 'explicit_users'
+
+export interface RuleCondition {
+  id: string
+  expression: string
+  description: string | null
+  sequence: number
+}
+
+export interface RuleConditionInput {
+  expression: string
+  description?: string | null
+}
+
+export interface RuleActionOut {
+  id: string
+  action_type: RuleActionType
+  strategy: ApproverStrategy | null
+  role_name: string | null
+  user_ids: string[] | null
+  variable_name: string | null
+  variable_value: unknown
+  config: Record<string, unknown> | null
+  sequence: number
+}
+
+export interface RuleActionInput {
+  action_type: RuleActionType
+  strategy?: ApproverStrategy | null
+  role_name?: string | null
+  user_ids?: string[] | null
+  variable_name?: string | null
+  variable_value?: unknown
+  config?: Record<string, unknown> | null
+}
+
+export interface ApprovalRule {
+  id: string
+  key: string
+  name: string
+  definition_id: string | null
+  step_key: string | null
+  priority: number
+  is_active: boolean
+  stop_on_match: boolean
+  is_system: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+  conditions: RuleCondition[]
+  actions: RuleActionOut[]
+}

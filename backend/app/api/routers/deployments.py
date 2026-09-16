@@ -29,6 +29,7 @@ from app.schemas import (
     DeploymentOut, DeploymentSnapshotOut, DeploymentStaffAssignRequest, ExtendExpiryActionRequest,
     ReissueTokenOut, RenewActionRequest, StaffOptionOut, SubscriptionRequestReviewAction, SuspendActionRequest,
 )
+from app.approvals import deployment_hooks
 from app.services import deployment_client
 from app.services.deployment_scope import assigned_deployment_ids
 from app.services.maintenance_query import currently_active_windows
@@ -224,11 +225,29 @@ async def action_renew(
     deployment_id: str, body: RenewActionRequest, db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission(*DEPLOYMENTS_RENEW)),
 ):
+    """Money action — gated by an approval workflow when one is configured
+    (migration-seeded key 'deployment_renew', see app/approvals/
+    deployment_hooks.py). With no active/published workflow for that key,
+    behaves exactly as before: runs immediately and returns the
+    deployment's raw response. When gated, returns {"approval_required":
+    true, ...} instead and the real call happens once approved."""
     d = await _get_visible_or_404(db, deployment_id, current_user)
-    try:
-        return await deployment_client.renew(d, new_expiry_date=body.new_expiry_date.isoformat(), renewal_amount=body.renewal_amount)
-    except deployment_client.DeploymentCallError as e:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+    new_expiry_date = body.new_expiry_date.isoformat()
+
+    async def _immediate() -> dict:
+        try:
+            return await deployment_client.renew(d, new_expiry_date=new_expiry_date, renewal_amount=body.renewal_amount)
+        except deployment_client.DeploymentCallError as e:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+
+    return await deployment_hooks.request_or_execute(
+        db, current_user, key=deployment_hooks.RENEW_KEY, deployment=d,
+        variables={
+            "new_expiry_date": new_expiry_date, "renewal_amount": body.renewal_amount,
+            "summary": f"Renew {d.client_name} to {new_expiry_date}",
+        },
+        immediate=_immediate,
+    )
 
 
 @router.post("/{deployment_id}/actions/suspend")
@@ -236,11 +255,22 @@ async def action_suspend(
     deployment_id: str, body: SuspendActionRequest, db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission(*DEPLOYMENTS_SUSPEND)),
 ):
+    """Money action — gated by an approval workflow when one is configured
+    (migration-seeded key 'deployment_suspend'). See action_renew's
+    docstring for the gated/immediate response shapes."""
     d = await _get_visible_or_404(db, deployment_id, current_user)
-    try:
-        return await deployment_client.suspend(d, reason=body.reason)
-    except deployment_client.DeploymentCallError as e:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+
+    async def _immediate() -> dict:
+        try:
+            return await deployment_client.suspend(d, reason=body.reason)
+        except deployment_client.DeploymentCallError as e:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+
+    return await deployment_hooks.request_or_execute(
+        db, current_user, key=deployment_hooks.SUSPEND_KEY, deployment=d,
+        variables={"reason": body.reason, "summary": f"Suspend {d.client_name}: {body.reason}"},
+        immediate=_immediate,
+    )
 
 
 @router.post("/{deployment_id}/actions/change-plan")
@@ -248,11 +278,23 @@ async def action_change_plan(
     deployment_id: str, body: ChangePlanActionRequest, db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission(*DEPLOYMENTS_CHANGE_PLAN)),
 ):
+    """Money action — gated by an approval workflow when one is configured
+    (migration-seeded key 'deployment_change_plan'). See action_renew's
+    docstring for the gated/immediate response shapes."""
     d = await _get_visible_or_404(db, deployment_id, current_user)
-    try:
-        return await deployment_client.change_plan(d, new_plan_id=str(body.new_plan_id))
-    except deployment_client.DeploymentCallError as e:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+    new_plan_id = str(body.new_plan_id)
+
+    async def _immediate() -> dict:
+        try:
+            return await deployment_client.change_plan(d, new_plan_id=new_plan_id)
+        except deployment_client.DeploymentCallError as e:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+
+    return await deployment_hooks.request_or_execute(
+        db, current_user, key=deployment_hooks.CHANGE_PLAN_KEY, deployment=d,
+        variables={"new_plan_id": new_plan_id, "summary": f"Change plan for {d.client_name}"},
+        immediate=_immediate,
+    )
 
 
 @router.post("/{deployment_id}/actions/extend-expiry")

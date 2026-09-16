@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutGrid, Ticket, CalendarClock, LogOut, Users, Bell, Menu, X, ShieldCheck } from 'lucide-react'
+import { LayoutGrid, Ticket, CalendarClock, LogOut, Users, Bell, Menu, X, ShieldCheck, CheckSquare, Workflow } from 'lucide-react'
 import { useAuthStore } from './stores/auth'
 import api from './lib/api'
 import { cn } from './lib/utils'
@@ -16,6 +16,11 @@ import StaffUsersPage from './pages/users/StaffUsersPage'
 import NotificationsPage from './pages/notifications/NotificationsPage'
 import RolesPage from './pages/rbac/RolesPage'
 import RolePermissionsPage from './pages/rbac/RolePermissionsPage'
+import MyApprovalsPage from './pages/workflows/MyApprovalsPage'
+import WorkflowListPage from './pages/workflows/WorkflowListPage'
+import WorkflowDetailPage from './pages/workflows/WorkflowDetailPage'
+import WorkflowDesignerPage from './pages/workflows/WorkflowDesignerPage'
+import ApprovalRulesPage from './pages/workflows/ApprovalRulesPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -46,6 +51,8 @@ const NAV_ITEMS = [
   { to: '/tickets', label: 'Support Tickets', icon: Ticket, permission: 'tickets.view' },
   { to: '/maintenance-windows', label: 'Maintenance', icon: CalendarClock, permission: 'maintenance.view' },
   { to: '/notifications', label: 'Notifications', icon: Bell, permission: 'notifications.view' },
+  { to: '/approvals', label: 'Approvals', icon: CheckSquare, permission: 'approvals.view' },
+  { to: '/workflows', label: 'Workflows', icon: Workflow, permission: 'workflows.view' },
 ] as const
 
 // Flush left accent bar rather than a filled pill — reads calmer against a
@@ -183,6 +190,11 @@ export default function App() {
       <Route path="/users" element={<RequireAuth><RequirePermission permission="staff.view"><Shell><StaffUsersPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/roles" element={<RequireAuth><RequirePermission permission="rbac.manage"><Shell><RolesPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/roles/:roleId/permissions" element={<RequireAuth><RequirePermission permission="rbac.manage"><Shell><RolePermissionsPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/approvals" element={<RequireAuth><RequirePermission permission="approvals.view"><Shell><MyApprovalsPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/workflows" element={<RequireAuth><RequirePermission permission="workflows.view"><Shell><WorkflowListPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/workflows/:id" element={<RequireAuth><RequirePermission permission="workflows.view"><Shell><WorkflowDetailPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/workflows/:id/versions/:versionId" element={<RequireAuth><RequirePermission permission="workflows.view"><Shell><WorkflowDesignerPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/workflow-rules" element={<RequireAuth><RequirePermission permission="workflow_rules.view"><Shell><ApprovalRulesPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="*" element={<Navigate to="/deployments" replace />} />
     </Routes>
   )

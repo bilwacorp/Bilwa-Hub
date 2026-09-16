@@ -23,6 +23,7 @@ from app.services.notifications.constants import (
     DEFAULT_PROVIDER,
     DEFAULT_WHATSAPP_PROVIDER,
     SENSITIVE_CONTEXT_KEYS,
+    TEMPLATE_APPROVAL_REQUESTED,
     TEMPLATE_PASSWORD_RESET,
     TEMPLATE_SUBSCRIPTION_EXPIRING,
     TEMPLATE_SUBSCRIPTION_REQUEST_RAISED,
@@ -283,6 +284,19 @@ class NotificationService:
                 "days_left": days_left,
                 "deployment_url": deployment_url,
             },
+        )
+
+    async def send_approval(
+        self, *, recipient: str, approver: str, request: str, action_url: str,
+    ) -> NotificationLog:
+        """A new workflow approval task was assigned to `recipient` — see
+        app/workflow/executor.py's _notify_candidate_approvers. Email only:
+        this hub has no push/mobile app to notify a candidate approver on."""
+        return await self.send_template(
+            recipient=recipient,
+            template=TEMPLATE_APPROVAL_REQUESTED,
+            context={"approver": approver, "request": request, "action_url": action_url},
+            subject=f"Approval needed: {request}",
         )
 
     async def send_password_reset(
