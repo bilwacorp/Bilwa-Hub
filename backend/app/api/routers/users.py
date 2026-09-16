@@ -50,6 +50,8 @@ async def list_users(db: AsyncSession = Depends(get_db)):
 
 @router.post("", response_model=StaffUserOut, status_code=201)
 async def create_user(body: StaffUserCreate, db: AsyncSession = Depends(get_db)):
+    if not await rbac.get_role_by_name(db, body.role):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown role: {body.role!r}")
     user = User(
         username=body.username, full_name=body.full_name, email=body.email, phone=body.phone,
         hashed_password=get_password_hash(body.password),
@@ -68,14 +70,30 @@ async def update_user(user_id: uuid.UUID, body: StaffUserUpdate, db: AsyncSessio
     user = await _get_user_or_404(db, user_id)
     current_role = await rbac.get_role(str(user.id))
     is_self = user.id == current_user.id
-    demoting_or_deactivating = (body.is_active is False) or (body.role is not None and body.role != current_role)
+    role_changing = body.role is not None and body.role != current_role
+    demoting_or_deactivating = (body.is_active is False) or role_changing
 
     if is_self and demoting_or_deactivating:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot deactivate or change your own role — ask another admin")
 
-    losing_admin = current_role == "admin" and demoting_or_deactivating
-    if losing_admin and await rbac.count_active_admins(db) <= 1:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot remove the last active admin")
+    if role_changing and not await rbac.get_role_by_name(db, body.role):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown role: {body.role!r}")
+
+    # Generalized "don't remove the last person who can manage staff"
+    # guard — checks the STAFF_MANAGE *permission*, not a hardcoded role
+    # name, since roles are custom now (a role other than 'admin' could
+    # also hold STAFF_MANAGE).
+    current_role_perms = set(await rbac.get_permissions_for_role(current_role)) if current_role else set()
+    currently_holds_staff_manage = STAFF_MANAGE in current_role_perms
+    if body.is_active is False:
+        would_still_hold_staff_manage = False
+    elif role_changing:
+        would_still_hold_staff_manage = STAFF_MANAGE in await rbac.get_permissions_for_role(body.role)
+    else:
+        would_still_hold_staff_manage = currently_holds_staff_manage
+    losing_staff_manage = currently_holds_staff_manage and not would_still_hold_staff_manage
+    if losing_staff_manage and await rbac.count_users_with_permission(db, *STAFF_MANAGE) <= 1:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot remove the last staff member who can manage staff accounts")
 
     for field in ("full_name", "email", "phone", "is_active"):
         value = getattr(body, field)

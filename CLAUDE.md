@@ -21,9 +21,12 @@ tickets, maintenance windows. No per-device sessions. See `README.md`'s
 there for the full rationale.
 
 Staff user management + two roles (`admin`, `engineer`) landed after
-Phase 1 as a small follow-on — see "The permission model" below. There is
-still no general permission *catalog*/roles UI: the two roles and what
-each one grants are hardcoded, not admin-configurable.
+Phase 1 as a small follow-on. A dynamic permission catalog + Roles &
+Permissions UI landed after that (`api/routers/rbac.py`,
+`frontend/src/pages/rbac/`) — an admin can now create custom roles and
+pick exactly which of the six catalog permissions each one holds, not
+just toggle between the two seeded roles. See "The permission model"
+below.
 
 Email + WhatsApp staff notifications (a support ticket raised, a
 renewal/upgrade request raised) landed after that — see
@@ -116,12 +119,10 @@ core/deps.py          Ported from PoultryOS-CBP: _BearerOrCookie + get_current_u
                       (token_version-based revocation). Deliberately dropped: UserSession/
                       "sid" per-device tracking, mobile-vs-web client split — Phase 1 has
                       exactly one staff login, web-only.
-core/permissions.py   Two permissions: STAFF_MANAGE (staff/user management, admin-only) and
-                      FLEET_MANAGE (deployments/tickets/maintenance, granted to both 'admin'
-                      and 'engineer' — see "The permission model" below). require_permission()'s
-                      shape is ported from PoultryOS-CBP so a later phase can keep growing a
-                      real per-resource catalog without changing how routes are gated.
-                      register.py/ingest.py are NOT Casbin-gated at all — they're
+core/permissions.py   ALL_PERMISSIONS — the six-permission catalog (staff/deployments/tickets/
+                      maintenance/notifications/rbac, all '.manage') — see "The permission
+                      model" below. require_permission()'s shape is ported from
+                      PoultryOS-CBP. register.py/ingest.py are NOT Casbin-gated at all — they're
                       machine-to-machine, shared-secret authenticated instead.
 core/casbin_enforcer.py, core/casbin_watcher.py, core/rbac_model.conf
                       Ported near-verbatim from PoultryOS-CBP — generic, no app-specific
@@ -160,8 +161,9 @@ services/notification_triggers.py
                       Deployment.expiry_reminder_sent_for). All three fan out via
                       recipients.recipients_for_deployment() — a deployment's explicitly
                       assigned staff (DeploymentStaffAssignment) if any, else every active
-                      FLEET_MANAGE holder — to whichever of email/WhatsApp each recipient has
-                      on file (User.email / User.phone).
+                      user holding a fleet-area permission (recipients.fleet_staff(), see
+                      "The permission model") — to whichever of email/WhatsApp each
+                      recipient has on file (User.email / User.phone).
 api/routers/
   auth.py             login/logout/refresh/me — MFA, phone/WhatsApp OTP, and mobile
                       refresh-token pairing all dropped (ported subset only). Self-service
@@ -175,21 +177,24 @@ api/routers/
   register.py         POST /register — public, single-use registration_token auth, not JWT
   ingest.py            POST /ingest/heartbeat, POST /ingest/support-ticket — api_key bearer
                       auth (hash-compared against Deployment.api_key_hash)
-  deployments.py        FLEET_MANAGE (admin + engineer): create pending deployment + token,
+  deployments.py        DEPLOYMENTS_MANAGE: create pending deployment + token,
                       list, detail (+ latest snapshot), reissue-token, the inbound-action
                       triggers (renew/suspend/change-plan/extend-expiry/review-request), and
                       GET staff-options / PUT {id}/staff (assign staff to a deployment — narrows
                       that deployment's notification fan-out, see services/notifications/
                       recipients.py). staff-options is registered ahead of GET /{deployment_id}
                       so the literal path segment isn't swallowed by the dynamic one.
-  tickets.py            FLEET_MANAGE: list/detail/update support tickets
-  maintenance.py        FLEET_MANAGE: plain CRUD on maintenance windows, no automation
-  users.py              STAFF_MANAGE (admin only): staff account CRUD (deactivate, not hard
+  tickets.py            TICKETS_MANAGE: list/detail/update support tickets
+  maintenance.py        MAINTENANCE_MANAGE: plain CRUD on maintenance windows, no automation
+  users.py              STAFF_MANAGE: staff account CRUD (deactivate, not hard
                       delete — MaintenanceWindow.created_by FKs to users.id) + role
                       assignment. Guards against self-lockout (can't deactivate/change your
-                      own role) and against dropping the last active admin.
-  notifications.py      FLEET_MANAGE: notification history (list/detail/resend/delete) +
+                      own role) and against dropping the last active staff.manage holder.
+  notifications.py      NOTIFICATIONS_MANAGE: notification history (list/detail/resend/delete) +
                       test-email/test-whatsapp — see services/notifications/README.md.
+  rbac.py               RBAC_MANAGE (admin only at cutover): the Roles & Permissions admin
+                      feature itself — permission catalog (read-only), role CRUD, and
+                      get/set a role's permission set. See "The permission model" above.
 ```
 
 ### Frontend — `frontend/src/`
@@ -226,38 +231,72 @@ pages/deployments/DeploymentDetailPage.tsx   latest snapshot (including pending_
                                               recipients — see CLAUDE.md's deployments.py entry)
 pages/tickets/SupportTicketsPage.tsx         fleet-wide ticket table + status update
 pages/maintenance/MaintenanceWindowsPage.tsx list + create/edit, no automation
-pages/users/StaffUsersPage.tsx               admin-only: staff table (role/active inline
-                                              editors, reset-password), "Staff" nav item in
-                                              App.tsx's Shell only renders for role='admin'
+pages/users/StaffUsersPage.tsx               staff.manage: staff table (role/active inline
+                                              editors, reset-password) — role select is
+                                              populated from GET /rbac/roles, not hardcoded
 pages/notifications/NotificationsPage.tsx    notification history table (filter by status/
                                               channel/recipient), resend/delete, test-email/
                                               test-whatsapp buttons
+pages/rbac/RolesPage.tsx                     rbac.manage: role list (name/description/
+                                              built-in-vs-custom Badge), create/delete —
+                                              is_system roles get no delete button
+pages/rbac/RolePermissionsPage.tsx           rbac.manage: one checkbox per catalog permission
+                                              for a given role, dirty-tracked Save/Reset
+
+App.tsx's Shell nav items and route guards (RequirePermission) are gated by
+useAuthStore().can('resource.action') — fed by /auth/me's `permissions`
+field — not by a hardcoded role name (see "The permission model" above).
 ```
 
-### The permission model (admin / engineer)
+### The permission model (roles & permission catalog)
 
-Two Casbin permissions, both defined in `core/permissions.py`:
+Six Casbin permissions, all defined in `core/permissions.py`'s
+`ALL_PERMISSIONS`: `staff.manage`, `deployments.manage`, `tickets.manage`,
+`maintenance.manage`, `notifications.manage`, `rbac.manage`. Each router
+gates its whole route set with one of these via `require_permission()`, at
+the `APIRouter(dependencies=[...])` level — no per-route split.
 
-- **`STAFF_MANAGE`** (`staff:manage`) — staff account CRUD + role assignment
-  (`api/routers/users.py`). Granted only to `admin`.
-- **`FLEET_MANAGE`** (`fleet:manage`) — deployments, tickets, maintenance
-  windows. Granted to both `admin` and `engineer`.
+This used to be two hardcoded permissions with two hardcoded roles
+(`admin`/`engineer`, no catalog, no UI). `alembic/versions/010_rbac_catalog.py`
+was a **behavior-preserving cutover** to a dynamic system — nobody's
+effective access changed, it just became inspectable/editable:
 
-A user's role is a Casbin `g` grouping row (`services/rbac.py`), not a
-column on `User` — one role per user, replaced wholesale on change, not
-stacked. `alembic/versions/005_staff_roles_and_fleet_permission.py` is
-where the `p` rules granting each role its permissions were seeded; new
-roles beyond `admin`/`engineer` would need a migration (or a one-off
-`INSERT INTO casbin_rule`) the same way, since there's still no
-roles-catalog UI.
+- **`Role`** (`app/models.py`) — dynamic, admin-creatable role *metadata*
+  (name, description, `is_system`). `is_system=True` on the two seeded
+  roles (`admin`, `engineer`) blocks renaming/deleting them via the
+  Roles & Permissions UI (`api/routers/rbac.py`, `frontend/src/pages/rbac/`)
+  — their *permissions* can still be edited, just not their name.
+- **`Permission`** (`app/models.py`) — the fixed, migration-seeded catalog
+  the UI's checkbox grid renders against. New permissions are added by a
+  migration (mirroring `ALL_PERMISSIONS`), never invented at runtime.
+- **`casbin_rule`** stays the actual enforcement source of truth — `Role`/
+  `Permission` are metadata layered on top, kept in sync by
+  `services/rbac.py` (never edited directly). A user's role is still a
+  Casbin `g` grouping row, not a column on `User` — one role per user,
+  replaced wholesale on change, not stacked (this hub didn't adopt
+  multi-role-per-user when it added the catalog, unlike PoultryPro-CBF's
+  equivalent system).
 
-`api/routers/users.py` guards two footguns directly (not via Casbin):
+Since roles are custom now, anything that used to check `role == "admin"`
+by name had to become a permission check instead — most notably
+`services/notifications/recipients.py`'s `fleet_staff()` (notification
+fan-out) and the frontend's route/nav guards (`useAuthStore().can()`,
+fed by `/auth/me`'s new `permissions: string[]` field). Grepping for a
+literal `"admin"`/`"engineer"` string anywhere outside a migration or the
+two seed rows themselves is a sign something was missed.
+
+`api/routers/users.py` and `api/routers/rbac.py` guard footguns directly
+(not via Casbin — Casbin has no concept of "don't let this go to zero"):
 an admin can't deactivate or change their own role (must ask another
-admin), and no edit may drop the last active admin (`rbac.count_active_admins`).
-Deactivating/resetting a user's password bumps `token_version`
-(`core/deps.get_current_user` already checks it) — but a deactivated
-user is rejected immediately regardless, since `is_active` is re-checked
-live on every request, not just baked into the JWT.
+admin); no edit may drop the last active `staff.manage` holder
+(`rbac.count_users_with_permission`); no role edit/delete may orphan
+`rbac.manage` entirely (`rbac.would_orphan_permission`) — checked by
+resource+action now, not by hardcoding "the admin role", since a custom
+role could also hold either permission. Deactivating/resetting a user's
+password bumps `token_version` (`core/deps.get_current_user` already
+checks it) — but a deactivated user is rejected immediately regardless,
+since `is_active` is re-checked live on every request, not just baked
+into the JWT.
 
 ### The two-credential design (read before touching auth/registration code)
 

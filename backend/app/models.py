@@ -7,7 +7,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -42,6 +42,40 @@ class User(Base):
     password_reset_token_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     password_reset_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class Role(Base):
+    """Role metadata for the admin Roles & Permissions UI (api/routers/rbac.py)
+    — NOT the enforcement source of truth. Actual grants live in
+    casbin_rule's p/g rows (services/rbac.py); this table only backs role
+    CRUD (name/description) and `is_system`, which blocks renaming/deleting
+    the two seeded roles ('admin', 'engineer') — their *permissions* can
+    still be edited, just not their name, and they can't be deleted out
+    from under every user holding them."""
+    __tablename__ = "roles"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class Permission(Base):
+    """The reviewable permission catalog the Roles & Permissions UI's
+    checkbox grid renders against (core/permissions.py's ALL_PERMISSIONS is
+    what a migration seeds into this table). New permissions are added by a
+    migration, never invented at runtime — see rbac.py's list_permissions."""
+    __tablename__ = "permissions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    resource: Mapped[str] = mapped_column(String(100), nullable=False)
+    action: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (UniqueConstraint("resource", "action", name="uq_permissions_resource_action"),)
 
 
 class DeploymentStatus(str, enum.Enum):
@@ -92,8 +126,9 @@ class DeploymentStaffAssignment(Base):
     Narrows notification fan-out (services/notifications/recipients.py's
     recipients_for_deployment) to just the assigned staff for that
     deployment's tickets/subscription-request alerts, instead of every
-    FLEET_MANAGE holder — a deployment with no assignment still falls back
-    to notifying everyone, so nothing breaks for an unassigned deployment.
+    fleet-area permission holder — a deployment with no assignment still
+    falls back to notifying everyone, so nothing breaks for an unassigned
+    deployment.
     Purely a junction row — no own id, composite PK."""
     __tablename__ = "deployment_staff_assignments"
 

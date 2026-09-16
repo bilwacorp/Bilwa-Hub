@@ -57,11 +57,12 @@ to this package:
 All three fan out via `recipients_for_deployment()` (`recipients.py`): the staff
 explicitly assigned to that deployment (Deployments → a deployment →
 "Assigned Staff", `DeploymentStaffAssignment` / `PUT /deployments/{id}/staff`)
-if any, otherwise every active `fleet_staff()` holder (everyone with
-FLEET_MANAGE) — an unassigned deployment still notifies everyone rather than
-going silent. One email per recipient with an email on file, one WhatsApp
-message per recipient with a phone on file (`User.phone`, set from the Staff
-page).
+if any, otherwise every active `fleet_staff()` holder (anyone holding
+`deployments.manage`, `tickets.manage`, `maintenance.manage`, or
+`notifications.manage` — see `core/permissions.py`) — an unassigned
+deployment still notifies everyone rather than going silent. One email per
+recipient with an email on file, one WhatsApp message per recipient with a
+phone on file (`User.phone`, set from the Staff page).
 
 One more trigger lives outside `notification_triggers.py`, called directly
 from `api/routers/auth.py`'s `forgot_password` endpoint instead: a self-
@@ -194,7 +195,7 @@ same posture as a missing email.
 | `WHATSAPP_TIMEOUT_SECONDS` | Request timeout |
 | `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | Redis, dedicated DB index (default `redis://redis:6379/1` in compose) — this is a *real* dependency for this feature, unlike `REDIS_URL` (the Casbin watcher's best-effort pub/sub, which degrades gracefully without it) |
 
-## Admin API (`/api/v1/notifications`, FLEET_MANAGE — admin + engineer)
+## Admin API (`/api/v1/notifications`, NOTIFICATIONS_MANAGE)
 
 - `GET /notifications` (aliased `/history`) — paginated list, filterable by
   `status`, `channel`, `recipient`.
@@ -222,6 +223,7 @@ same posture as a missing email.
 - No push channel (no mobile app in this hub).
 - Kill switches are env vars (`core/config.py`), not a DB-backed `AppSetting`
   toggle with its own admin-UI switch.
-- Recipients are resolved by Casbin role (`admin` + `engineer`, i.e.
-  everyone with `FLEET_MANAGE`) rather than a fixed "admins of this tenant"
-  concept — this hub has one flat staff list, not per-deployment admins.
+- Recipients are resolved by permission (anyone holding a fleet-area
+  `*.manage` permission, whichever role grants it) rather than a fixed
+  "admins of this tenant" concept — this hub has one flat staff list, not
+  per-deployment admins.

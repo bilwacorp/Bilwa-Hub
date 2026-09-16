@@ -33,7 +33,7 @@ export type DerivedDeploymentStatus = 'never' | 'online' | 'stale' | 'offline' |
 
 // Minimal staff shape for the deployment-assignment picker — not the full
 // StaffUser (role/is_active/created_at), since GET /deployments/staff-options
-// is FLEET_MANAGE (both roles), not STAFF_MANAGE (admin-only, see StaffUser).
+// is DEPLOYMENTS_MANAGE, not STAFF_MANAGE (see StaffUser).
 export interface StaffOption {
   id: string
   username: string
@@ -109,9 +109,10 @@ export interface MaintenanceWindowListResponse {
   items: MaintenanceWindow[]
 }
 
-// admin: full access, incl. managing other staff accounts.
-// engineer: fleet access (deployments/tickets/maintenance) but not staff management.
-export type StaffRole = 'admin' | 'engineer'
+// A role name — roles are dynamic now (see Role below), not a fixed set of
+// two. The two seeded roles are still 'admin' and 'engineer', but a custom
+// role can be any string matching ^[a-z0-9_]+$.
+export type StaffRole = string
 
 export interface StaffUser {
   id: string
@@ -151,4 +152,21 @@ export interface NotificationLog {
 export interface NotificationLogListResponse {
   total: number
   items: NotificationLog[]
+}
+
+// ── rbac (roles & permission catalog) ───────────────────────────────────
+
+export interface Permission {
+  id: string
+  resource: string
+  action: string
+  description: string | null
+}
+
+export interface Role {
+  id: string
+  name: string
+  description: string | null
+  is_system: boolean
+  created_at: string
 }

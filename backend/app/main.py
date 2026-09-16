@@ -12,7 +12,7 @@ from app.core.casbin_enforcer import init_enforcer
 from app.core.casbin_watcher import start_watcher, stop_watcher
 from app.core.maintenance_scheduler import start_scheduler as start_maintenance_scheduler, stop_scheduler as stop_maintenance_scheduler
 from app.core.expiry_reminder_scheduler import start_scheduler as start_expiry_scheduler, stop_scheduler as stop_expiry_scheduler
-from app.api.routers import auth, register, ingest, deployments, tickets, maintenance, users, notifications
+from app.api.routers import auth, register, ingest, deployments, tickets, maintenance, users, notifications, rbac
 
 logging.basicConfig(level=settings.LOG_LEVEL)
 logger = logging.getLogger(__name__)
@@ -101,3 +101,4 @@ app.include_router(tickets.router, prefix=PREFIX)
 app.include_router(maintenance.router, prefix=PREFIX)
 app.include_router(users.router, prefix=PREFIX)
 app.include_router(notifications.router, prefix=PREFIX)
+app.include_router(rbac.router, prefix=PREFIX)

@@ -1,6 +1,7 @@
 """Staff-facing deployment registry + inbound-action triggers. Every route
-requires FLEET_MANAGE (see core/permissions.py — granted to both 'admin'
-and 'engineer')."""
+requires DEPLOYMENTS_MANAGE (see core/permissions.py — granted to both
+'admin' and 'engineer' at cutover, and to any custom role an admin grants
+it to via the Roles & Permissions UI, api/routers/rbac.py)."""
 import hashlib
 import secrets
 from datetime import datetime
@@ -10,7 +11,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.permissions import FLEET_MANAGE, require_permission
+from app.core.permissions import DEPLOYMENTS_MANAGE, require_permission
 from app.db.session import get_db
 from app.models import (
     Deployment, DeploymentSnapshot, DeploymentStaffAssignment, DeploymentStatus, MaintenanceWindow, User,
@@ -23,7 +24,7 @@ from app.schemas import (
 from app.services import deployment_client
 from app.services.maintenance_query import currently_active_windows
 
-router = APIRouter(prefix="/deployments", tags=["deployments"], dependencies=[Depends(require_permission(*FLEET_MANAGE))])
+router = APIRouter(prefix="/deployments", tags=["deployments"], dependencies=[Depends(require_permission(*DEPLOYMENTS_MANAGE))])
 
 
 async def _latest_snapshot(db: AsyncSession, deployment_id) -> DeploymentSnapshot | None:
@@ -143,7 +144,8 @@ async def assign_staff(deployment_id: str, body: DeploymentStaffAssignRequest, d
     incremental add/remove. Assigning at least one person here narrows
     services/notifications/recipients.py's fan-out for this deployment's
     tickets/subscription-requests to just the assigned staff; clearing the
-    set (empty user_ids) reverts to notifying every FLEET_MANAGE holder."""
+    set (empty user_ids) reverts to notifying every fleet-area permission
+    holder — see recipients.py's fleet_staff()."""
     d = await _get_or_404(db, deployment_id)
     wanted_ids = list(dict.fromkeys(body.user_ids))  # de-dupe, preserve order
     if wanted_ids:

@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, field_serializer, field_validator
+from pydantic import BaseModel, Field, field_serializer, field_validator
 
 from app.models import (
     DeploymentStatus, MaintenanceWindowStatus, NotificationChannel, NotificationStatus, SupportTicketStatus,
@@ -48,10 +48,12 @@ class TokenResponse(BaseModel):
     expires_in: int
 
 
-# admin: full access, incl. managing other staff accounts (STAFF_MANAGE).
-# engineer: fleet access (deployments/tickets/maintenance, FLEET_MANAGE) but
-# cannot manage staff. See core/permissions.py and services/rbac.py.
-StaffRole = Literal["admin", "engineer"]
+# A role name — roles are dynamic/DB-backed now (see Role in app/models.py
+# and api/routers/rbac.py), so this is deliberately just `str`, not a fixed
+# Literal of the two seeded roles ('admin', 'engineer') the hub shipped
+# with. Validity (does this role actually exist) is checked server-side
+# against the `roles` table, not at the Pydantic type level.
+StaffRole = str
 
 
 class UserOut(BaseModel):
@@ -60,6 +62,12 @@ class UserOut(BaseModel):
     full_name: Optional[str]
     email: Optional[str]
     role: Optional[StaffRole] = None
+    # "resource.action" strings — what this logged-in user can actually do,
+    # via whichever role they hold. The frontend gates UI elements with
+    # can(permission) against this instead of a hardcoded role-name check,
+    # which breaks down once custom roles exist (see services/rbac.py's
+    # get_permissions_for_user).
+    permissions: List[str] = []
 
     model_config = {"from_attributes": True}
 
@@ -243,8 +251,8 @@ class DeploymentSnapshotOut(BaseModel):
 class StaffOptionOut(BaseModel):
     """Minimal staff shape for a picker — deliberately not the full
     StaffUserOut (role/is_active/created_at), since this is exposed to
-    anyone with FLEET_MANAGE (both admin + engineer), not just STAFF_MANAGE
-    (admin-only, see api/routers/users.py)."""
+    anyone with DEPLOYMENTS_MANAGE, not just STAFF_MANAGE (admin-only, see
+    api/routers/users.py)."""
     id: uuid.UUID
     username: str
     full_name: Optional[str]
@@ -421,3 +429,41 @@ class TestEmailRequest(BaseModel):
 class TestWhatsAppRequest(BaseModel):
     recipient: str
     message: str = "This is a test message from BilwaCorp Fleet Hub."
+
+
+# ── RBAC: permission catalog + custom roles (api/routers/rbac.py) ─────────
+
+class PermissionOut(BaseModel):
+    id: uuid.UUID
+    resource: str
+    action: str
+    description: Optional[str]
+
+    model_config = {"from_attributes": True}
+
+
+class RoleOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: Optional[str]
+    is_system: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RoleCreate(BaseModel):
+    # Lowercase/digits/underscore only — this is also the literal Casbin
+    # role name (casbin_rule.v0/v1), not just a display label.
+    name: str = Field(pattern=r"^[a-z0-9_]+$", min_length=1, max_length=50)
+    description: Optional[str] = None
+
+
+class RoleUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, pattern=r"^[a-z0-9_]+$", min_length=1, max_length=50)
+    description: Optional[str] = None
+
+
+class RolePermissionsUpdate(BaseModel):
+    # "resource.action" strings — replaces the role's full permission set.
+    permissions: List[str]

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.permissions import FLEET_MANAGE, require_permission
+from app.core.permissions import TICKETS_MANAGE, require_permission
 from app.db.session import get_db
 from app.models import Deployment, SupportTicket, SupportTicketStatus
 from app.schemas import SupportTicketListResponse, SupportTicketOut, SupportTicketUpdate
@@ -12,7 +12,7 @@ from app.services import deployment_client
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/tickets", tags=["tickets"], dependencies=[Depends(require_permission(*FLEET_MANAGE))])
+router = APIRouter(prefix="/tickets", tags=["tickets"], dependencies=[Depends(require_permission(*TICKETS_MANAGE))])
 
 
 @router.get("", response_model=SupportTicketListResponse)

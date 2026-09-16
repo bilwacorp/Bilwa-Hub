@@ -14,14 +14,9 @@ import { Input } from '../../components/ui/Input'
 import { PasswordInput } from '../../components/ui/PasswordInput'
 import { Select } from '../../components/ui/Select'
 import { Button } from '../../components/ui/Button'
-import type { StaffRole, StaffUser, StaffUserListResponse } from '../../types'
+import type { Role, StaffUser, StaffUserListResponse } from '../../types'
 
-const ROLE_OPTIONS: { value: StaffRole; label: string }[] = [
-  { value: 'admin', label: 'Admin — full access incl. staff management' },
-  { value: 'engineer', label: 'Engineer — fleet access (deployments, tickets, maintenance)' },
-]
-
-type NewStaffForm = { username: string; full_name: string; email: string; phone: string; password: string; role: StaffRole }
+type NewStaffForm = { username: string; full_name: string; email: string; phone: string; password: string; role: string }
 type ResetPasswordForm = { new_password: string }
 
 function errorDetail(e: unknown): string | undefined {
@@ -37,8 +32,14 @@ export default function StaffUsersPage() {
     queryFn: () => api.get<StaffUserListResponse>('/users').then((r) => r.data),
   })
 
+  const { data: roles } = useQuery({
+    queryKey: ['roles'],
+    queryFn: () => api.get<Role[]>('/rbac/roles').then((r) => r.data),
+  })
+  const roleOptions = (roles ?? []).map((r) => ({ value: r.name, label: r.description ? `${r.name} — ${r.description}` : r.name }))
+
   const [showCreate, setShowCreate] = useState(false)
-  const createForm = useForm<NewStaffForm>({ defaultValues: { role: 'engineer' } })
+  const createForm = useForm<NewStaffForm>()
   const createMutation = useMutation({
     mutationFn: (v: NewStaffForm) => api.post('/users', {
       username: v.username, full_name: v.full_name || null, email: v.email || null, phone: v.phone || null,
@@ -47,7 +48,7 @@ export default function StaffUsersPage() {
     onSuccess: () => {
       toast.success('Staff account created')
       setShowCreate(false)
-      createForm.reset({ role: 'engineer', username: '', full_name: '', email: '', phone: '', password: '' })
+      createForm.reset({ username: '', full_name: '', email: '', phone: '', password: '', role: '' })
       qc.invalidateQueries({ queryKey: ['staff-users'] })
     },
     onError: (e) => toast.error(errorDetail(e) || 'Failed to create staff account'),
@@ -110,7 +111,7 @@ export default function StaffUsersPage() {
             className="h-8 text-xs w-auto"
             value={u.role ?? ''}
             disabled={isSelf || patchMutation.isPending}
-            options={ROLE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            options={roleOptions}
             onChange={(e) => patchMutation.mutate({ id: u.id, body: { role: e.target.value } })}
             aria-label={`Role for ${u.username}`}
             title={isSelf ? 'Ask another admin to change your own role' : undefined}
@@ -162,7 +163,7 @@ export default function StaffUsersPage() {
           <Input label="Email" type="email" {...createForm.register('email')} />
           <Input label="Phone (WhatsApp)" placeholder="+91XXXXXXXXXX" {...createForm.register('phone')} />
           <PasswordInput label="Password" {...createForm.register('password', { required: true, minLength: 8 })} />
-          <Select label="Role" options={ROLE_OPTIONS} {...createForm.register('role', { required: true })} />
+          <Select label="Role" placeholder="Select a role" options={roleOptions} {...createForm.register('role', { required: true })} />
         </form>
       </Modal>
 

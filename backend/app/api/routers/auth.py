@@ -77,6 +77,10 @@ async def logout(response: Response):
 async def me(current_user: User = Depends(get_current_user)):
     out = UserOut.model_validate(current_user)
     out.role = await rbac.get_role(str(current_user.id))
+    # The frontend gates UI elements with can(resource, action) against
+    # this instead of a hardcoded role-name check (see
+    # services/rbac.get_permissions_for_user).
+    out.permissions = [f"{r}.{a}" for r, a in await rbac.get_permissions_for_user(str(current_user.id))]
     return out
 
 

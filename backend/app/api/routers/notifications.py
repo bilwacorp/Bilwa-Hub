@@ -1,7 +1,5 @@
 """Admin visibility into services/notifications/ — history, resend, delete,
-and real test sends. Gated by FLEET_MANAGE (admin + engineer, same as
-tickets/deployments/maintenance) rather than a dedicated permission — see
-core/permissions.py; this hub has no per-resource permission catalog yet."""
+and real test sends. Gated by NOTIFICATIONS_MANAGE — see core/permissions.py."""
 import json
 import uuid
 from typing import Optional
@@ -9,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.permissions import FLEET_MANAGE, require_permission
+from app.core.permissions import NOTIFICATIONS_MANAGE, require_permission
 from app.db.session import get_db
 from app.models import NotificationChannel, NotificationStatus
 from app.schemas import (
@@ -23,7 +21,7 @@ from app.services.notifications.tasks import send_email_task, send_whatsapp_task
 
 router = APIRouter(
     prefix="/notifications", tags=["notifications"],
-    dependencies=[Depends(require_permission(*FLEET_MANAGE))],
+    dependencies=[Depends(require_permission(*NOTIFICATIONS_MANAGE))],
 )
 
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutGrid, Ticket, CalendarClock, LogOut, Users, Bell, Menu, X } from 'lucide-react'
+import { LayoutGrid, Ticket, CalendarClock, LogOut, Users, Bell, Menu, X, ShieldCheck } from 'lucide-react'
 import { useAuthStore } from './stores/auth'
 import api from './lib/api'
 import { cn } from './lib/utils'
@@ -14,6 +14,8 @@ import SupportTicketsPage from './pages/tickets/SupportTicketsPage'
 import MaintenanceWindowsPage from './pages/maintenance/MaintenanceWindowsPage'
 import StaffUsersPage from './pages/users/StaffUsersPage'
 import NotificationsPage from './pages/notifications/NotificationsPage'
+import RolesPage from './pages/rbac/RolesPage'
+import RolePermissionsPage from './pages/rbac/RolePermissionsPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -21,9 +23,12 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
-function RequireAdmin({ children }: { children: React.ReactNode }) {
-  const role = useAuthStore((s) => s.user?.role)
-  if (role !== 'admin') return <Navigate to="/deployments" replace />
+// Gates a route by permission ("resource.action") rather than a hardcoded
+// role name — a custom role granted e.g. staff.manage should reach the
+// Staff page too, not just the literal 'admin' role.
+function RequirePermission({ permission, children }: { permission: string; children: React.ReactNode }) {
+  const can = useAuthStore((s) => s.can)
+  if (!can(permission)) return <Navigate to="/deployments" replace />
   return <>{children}</>
 }
 
@@ -50,6 +55,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const navigate = useNavigate()
   const user = useAuthStore((s) => s.user)
   const clearAuth = useAuthStore((s) => s.clearAuth)
+  const can = useAuthStore((s) => s.can)
   const role = user?.role
 
   const handleLogout = async () => {
@@ -76,10 +82,16 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
             {item.label}
           </NavLink>
         ))}
-        {role === 'admin' && (
+        {can('staff.manage') && (
           <NavLink to="/users" onClick={onNavigate} className={({ isActive }) => navItemClass(isActive)}>
             <Users size={16} className="shrink-0" />
             Staff
+          </NavLink>
+        )}
+        {can('rbac.manage') && (
+          <NavLink to="/roles" onClick={onNavigate} className={({ isActive }) => navItemClass(isActive)}>
+            <ShieldCheck size={16} className="shrink-0" />
+            Roles & Permissions
           </NavLink>
         )}
       </nav>
@@ -159,7 +171,9 @@ export default function App() {
       <Route path="/tickets" element={<RequireAuth><Shell><SupportTicketsPage /></Shell></RequireAuth>} />
       <Route path="/maintenance-windows" element={<RequireAuth><Shell><MaintenanceWindowsPage /></Shell></RequireAuth>} />
       <Route path="/notifications" element={<RequireAuth><Shell><NotificationsPage /></Shell></RequireAuth>} />
-      <Route path="/users" element={<RequireAuth><RequireAdmin><Shell><StaffUsersPage /></Shell></RequireAdmin></RequireAuth>} />
+      <Route path="/users" element={<RequireAuth><RequirePermission permission="staff.manage"><Shell><StaffUsersPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/roles" element={<RequireAuth><RequirePermission permission="rbac.manage"><Shell><RolesPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/roles/:roleId/permissions" element={<RequireAuth><RequirePermission permission="rbac.manage"><Shell><RolePermissionsPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="*" element={<Navigate to="/deployments" replace />} />
     </Routes>
   )

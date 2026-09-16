@@ -1,12 +1,23 @@
-"""Permissions — Phase 1 shipped with no catalog table or roles UI, a
-single STAFF_MANAGE permission gating every staff route. This is the first
-real per-resource split: STAFF_MANAGE now covers only staff/user
-management (admin-only), and FLEET_MANAGE covers deployments/tickets/
-maintenance (granted to both 'admin' and 'engineer' — see
-alembic/versions/005_staff_roles_and_fleet_permission.py and
-services/rbac.py). require_permission()'s shape is ported from
-PoultryOS-CBP's core/permissions.py so a future phase can keep growing a
-real per-resource catalog without changing how routes are gated."""
+"""Permissions — a Casbin `(resource, action)` pair per gated feature area,
+enforced via require_permission() below. `casbin_rule` (p/g rows) is the
+enforcement source of truth; `Role`/`Permission` (app/models.py) are DB-backed
+*metadata* layered on top purely for the admin-facing Roles & Permissions UI
+(api/routers/rbac.py) — a Permission row doesn't grant anything by itself,
+it just makes a (resource, action) pair visible/toggleable in that UI. This
+mirrors PoultryPro-CBF's core/permissions.py (same split), scaled down to
+this hub's much smaller resource set.
+
+Was originally two permissions (STAFF_MANAGE, and one coarse FLEET_MANAGE
+covering deployments/tickets/maintenance/notifications together) with no
+catalog or custom-role support — migration 010_rbac_catalog split
+FLEET_MANAGE into one permission per resource (behavior-preserving: 'admin'
+and 'engineer' were re-seeded with the exact same *effective* access they
+already had, just as separate rows now) so a custom role can be scoped to
+e.g. just tickets+notifications without also granting deployment control.
+
+ALL_PERMISSIONS is the canonical catalog — new permissions are added here
+*and* seeded into the `permissions` table by a migration, never invented at
+runtime (see rbac.py's list_permissions, which just reads that table)."""
 from fastapi import Depends, HTTPException, status
 
 from app.core.casbin_enforcer import get_enforcer
@@ -20,8 +31,23 @@ DEFAULT_DOMAIN = "default"
 # authenticated by a shared secret instead (api/routers/ingest.py verifies
 # the deployment's api_key_hash directly against the Deployment row, no
 # Casbin involved).
-STAFF_MANAGE = ("staff", "manage")  # users.py — admin only
-FLEET_MANAGE = ("fleet", "manage")  # deployments/tickets/maintenance — admin + engineer
+STAFF_MANAGE = ("staff", "manage")                # users.py
+DEPLOYMENTS_MANAGE = ("deployments", "manage")     # deployments.py (deployment registry + inbound actions + staff assignment)
+TICKETS_MANAGE = ("tickets", "manage")             # tickets.py
+MAINTENANCE_MANAGE = ("maintenance", "manage")     # maintenance.py
+NOTIFICATIONS_MANAGE = ("notifications", "manage") # notifications.py
+RBAC_MANAGE = ("rbac", "manage")                   # rbac.py — the roles/permissions catalog itself
+
+# (resource, action, description) — the migration-seeded catalog. Order here
+# is also the order the admin UI renders the permission grid in.
+ALL_PERMISSIONS: list[tuple[str, str, str]] = [
+    (*STAFF_MANAGE, "Create, deactivate, and reset the password of staff accounts; assign roles"),
+    (*DEPLOYMENTS_MANAGE, "Register client deployments, run renew/suspend/change-plan/extend-expiry actions, review subscription requests, assign staff to a deployment"),
+    (*TICKETS_MANAGE, "View and update the status of support tickets relayed from client deployments"),
+    (*MAINTENANCE_MANAGE, "Create and edit fleet maintenance windows"),
+    (*NOTIFICATIONS_MANAGE, "View notification history, resend/delete entries, send test emails/WhatsApp messages"),
+    (*RBAC_MANAGE, "Create/delete custom roles and change which permissions any role holds"),
+]
 
 
 async def has_permission(user_id: str, resource: str, action: str) -> bool:
