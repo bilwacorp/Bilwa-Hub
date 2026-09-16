@@ -3,6 +3,8 @@ import { LayoutGrid, Ticket, CalendarClock, LogOut, Users, Bell } from 'lucide-r
 import { useAuthStore } from './stores/auth'
 import api from './lib/api'
 import LoginPage from './pages/auth/LoginPage'
+import ForgotPasswordPage from './pages/auth/ForgotPasswordPage'
+import ResetPasswordPage from './pages/auth/ResetPasswordPage'
 import DeploymentsListPage from './pages/deployments/DeploymentsListPage'
 import DeploymentDetailPage from './pages/deployments/DeploymentDetailPage'
 import SupportTicketsPage from './pages/tickets/SupportTicketsPage'
@@ -64,6 +66,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/deployments" element={<RequireAuth><Shell><DeploymentsListPage /></Shell></RequireAuth>} />
       <Route path="/deployments/:deploymentId" element={<RequireAuth><Shell><DeploymentDetailPage /></Shell></RequireAuth>} />
       <Route path="/tickets" element={<RequireAuth><Shell><SupportTicketsPage /></Shell></RequireAuth>} />

@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # windows do — hourly is plenty and keeps the poll loop cheap.
     EXPIRY_REMINDER_SCHEDULER_INTERVAL_SECONDS: int = 3600
 
+    # Self-service "forgot password" link lifetime (api/routers/auth.py).
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
+
     # ── notifications (services/notifications/) ────────────────────────────
     # Celery broker/backend — a dedicated Redis DB index (1), separate from
     # nothing else in this app today (REDIS_URL/index 0 is the Casbin

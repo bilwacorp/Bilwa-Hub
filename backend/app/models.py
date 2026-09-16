@@ -35,6 +35,12 @@ class User(Base):
     # point — see core/deps.py's get_current_user, ported from
     # PoultryOS-CBP's same convention.
     token_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Self-service "forgot password" (api/routers/auth.py) — hash-only
+    # storage, same pattern as Deployment.registration_token_hash: this hub
+    # only ever needs to *verify* the token a user presents back, never
+    # present it again itself. NULL/expired = no reset in progress.
+    password_reset_token_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    password_reset_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 

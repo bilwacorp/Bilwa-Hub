@@ -107,6 +107,20 @@ class PasswordResetRequest(BaseModel):
     new_password: str
 
 
+# ── self-service forgot password (api/routers/auth.py) ─────────────────
+# Deliberately separate from PasswordResetRequest above, which is the
+# admin-resets-another-user shape (POST /users/{id}/reset-password) — this
+# pair is public/unauthenticated.
+
+class ForgotPasswordRequest(BaseModel):
+    username: str
+
+
+class ResetPasswordConfirmRequest(BaseModel):
+    token: str
+    new_password: str
+
+
 # ── registration / ingest ───────────────────────────────────────────────
 
 class RegisterRequest(BaseModel):

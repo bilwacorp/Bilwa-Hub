@@ -11,6 +11,7 @@ import { DataTable, type Column } from '../../components/ui/DataTable'
 import { Badge } from '../../components/ui/Badge'
 import { Modal } from '../../components/ui/Modal'
 import { Input } from '../../components/ui/Input'
+import { PasswordInput } from '../../components/ui/PasswordInput'
 import { Select } from '../../components/ui/Select'
 import { Button } from '../../components/ui/Button'
 import type { StaffRole, StaffUser, StaffUserListResponse } from '../../types'
@@ -160,7 +161,7 @@ export default function StaffUsersPage() {
           <Input label="Full name" {...createForm.register('full_name')} />
           <Input label="Email" type="email" {...createForm.register('email')} />
           <Input label="Phone (WhatsApp)" placeholder="+91XXXXXXXXXX" {...createForm.register('phone')} />
-          <Input label="Password" type="password" {...createForm.register('password', { required: true, minLength: 8 })} />
+          <PasswordInput label="Password" {...createForm.register('password', { required: true, minLength: 8 })} />
           <Select label="Role" options={ROLE_OPTIONS} {...createForm.register('role', { required: true })} />
         </form>
       </Modal>
@@ -170,7 +171,7 @@ export default function StaffUsersPage() {
         footer={<><Button variant="secondary" onClick={() => setResetTarget(null)}>Cancel</Button><Button loading={resetMutation.isPending} onClick={resetForm.handleSubmit((v) => resetTarget && resetMutation.mutate({ id: resetTarget.id, body: v }))}>Reset</Button></>}
       >
         <form className="space-y-4">
-          <Input label="New password" type="password" {...resetForm.register('new_password', { required: true, minLength: 8 })} />
+          <PasswordInput label="New password" {...resetForm.register('new_password', { required: true, minLength: 8 })} />
           <p className="text-xs text-muted">This immediately signs the user out of any existing session.</p>
         </form>
       </Modal>

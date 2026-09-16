@@ -1,12 +1,13 @@
 import { useForm } from 'react-hook-form'
 import { useMutation } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import axios from 'axios'
 import api from '../../lib/api'
 import { useAuthStore } from '../../stores/auth'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
+import { PasswordInput } from '../../components/ui/PasswordInput'
 
 type LoginForm = { username: string; password: string }
 
@@ -35,7 +36,10 @@ export default function LoginPage() {
         <p className="text-sm text-muted mb-6">Staff sign-in</p>
         <form className="space-y-4" onSubmit={handleSubmit((v) => loginMutation.mutate(v))}>
           <Input label="Username" {...register('username', { required: true })} />
-          <Input label="Password" type="password" {...register('password', { required: true })} />
+          <PasswordInput label="Password" {...register('password', { required: true })} />
+          <div className="text-right -mt-2">
+            <Link to="/forgot-password" className="text-sm text-accent hover:underline">Forgot password?</Link>
+          </div>
           <Button type="submit" className="w-full" loading={loginMutation.isPending}>Sign in</Button>
         </form>
       </div>

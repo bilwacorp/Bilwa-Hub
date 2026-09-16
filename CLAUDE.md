@@ -164,7 +164,14 @@ services/notification_triggers.py
                       on file (User.email / User.phone).
 api/routers/
   auth.py             login/logout/refresh/me — MFA, phone/WhatsApp OTP, and mobile
-                      refresh-token pairing all dropped (ported subset only)
+                      refresh-token pairing all dropped (ported subset only). Self-service
+                      forgot-password/reset-password (public, unauthenticated) landed later —
+                      hash-only reset token (users.password_reset_token_hash, 30min TTL,
+                      single-use), always 204 regardless of whether the username/email
+                      exists so the endpoint can't be used to enumerate staff accounts.
+                      Emails via services/notifications (TEMPLATE_PASSWORD_RESET) — the
+                      reset_url context key is in SENSITIVE_CONTEXT_KEYS so the live token
+                      never lands in NotificationLog.payload.
   register.py         POST /register — public, single-use registration_token auth, not JWT
   ingest.py            POST /ingest/heartbeat, POST /ingest/support-ticket — api_key bearer
                       auth (hash-compared against Deployment.api_key_hash)
