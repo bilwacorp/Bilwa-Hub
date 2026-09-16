@@ -55,8 +55,15 @@ async def get_permissions_for_user(user_id: str) -> list[tuple[str, str]]:
     """Every (resource, action) this specific user can reach through
     whatever role(s) they hold — used by /auth/me so the frontend can gate
     UI elements with can(resource, action) instead of a hardcoded role name
-    (which breaks down once custom roles exist)."""
-    rows = get_enforcer().get_permissions_for_user_in_domain(user_id, DEFAULT_DOMAIN)
+    (which breaks down once custom roles exist).
+
+    Deliberately get_implicit_permissions_for_user, not
+    get_permissions_for_user_in_domain: the latter only returns `p` rows
+    granted directly to this literal user id, which is never how this app
+    grants anything (always to a role name) — it would silently return []
+    for every real user. The "implicit" variant resolves through the `g`
+    role hierarchy first (same as enforce() does internally)."""
+    rows = await get_enforcer().get_implicit_permissions_for_user(user_id, DEFAULT_DOMAIN)
     return [(row[2], row[3]) for row in rows]
 
 
