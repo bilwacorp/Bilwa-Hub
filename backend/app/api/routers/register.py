@@ -10,10 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import event_types as et
 from app.db.session import get_db
 from app.models import Deployment, DeploymentStatus
 from app.schemas import RegisterRequest, RegisterResponse
 from app.services import crypto
+from app.services.events import record_event
 
 router = APIRouter(tags=["register"])
 
@@ -36,6 +38,11 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
     deployment.base_url = body.base_url
     deployment.status = DeploymentStatus.active
     deployment.registration_token_consumed_at = datetime.utcnow()
+    record_event(
+        db, event_type=et.DEPLOYMENT_REGISTERED, source=et.SOURCE_DEPLOYMENT, actor_type=et.ACTOR_DEPLOYMENT,
+        actor_id=deployment.id, entity_type=et.ENTITY_DEPLOYMENT, entity_id=deployment.id, deployment_id=deployment.id,
+        metadata={"base_url": deployment.base_url},
+    )
     await db.flush()
 
     return RegisterResponse(deployment_id=deployment.id, api_key=api_key)

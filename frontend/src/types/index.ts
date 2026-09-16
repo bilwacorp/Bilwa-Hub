@@ -326,3 +326,29 @@ export interface ApprovalRule {
   conditions: RuleCondition[]
   actions: RuleActionOut[]
 }
+
+// ── operational events (HUB-Expansion.md Phase 1) ─────────────────────────
+
+export type OperationalEventStatus = 'info' | 'pending' | 'success' | 'failure'
+
+export interface OperationalEvent {
+  id: string
+  event_type: string
+  source: string
+  actor_type: string
+  actor_id: string | null
+  entity_type: string | null
+  entity_id: string | null
+  deployment_id: string | null
+  customer_id: string | null
+  correlation_id: string
+  causation_id: string | null
+  status: OperationalEventStatus
+  event_metadata: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface OperationalEventListResponse {
+  total: number
+  items: OperationalEvent[]
+}

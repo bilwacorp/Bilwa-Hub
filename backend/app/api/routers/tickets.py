@@ -4,12 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import event_types as et
 from app.core.permissions import TICKETS_UPDATE_STATUS, TICKETS_VIEW, TICKETS_VIEW_ALL, has_permission, require_permission
 from app.db.session import get_db
 from app.models import Deployment, SupportTicket, SupportTicketStatus, User
 from app.schemas import SupportTicketListResponse, SupportTicketOut, SupportTicketUpdate
 from app.services import deployment_client
 from app.services.deployment_scope import assigned_deployment_ids
+from app.services.events import record_event
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +71,17 @@ async def update_ticket(
 ):
     from datetime import datetime
     t = await _get_visible_or_404(db, ticket_id, current_user)
+    old_status = t.status
     t.status = body.status
     if body.status in (SupportTicketStatus.resolved, SupportTicketStatus.closed) and t.resolved_at is None:
         t.resolved_at = datetime.utcnow()
+    record_event(
+        db,
+        event_type=et.TICKET_RESOLVED if body.status in (SupportTicketStatus.resolved, SupportTicketStatus.closed) else et.TICKET_UPDATED,
+        source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF, actor_id=current_user.id,
+        entity_type=et.ENTITY_TICKET, entity_id=t.id, deployment_id=t.deployment_id,
+        metadata={"from_status": old_status.value, "to_status": body.status.value},
+    )
     await db.flush()
 
     # Best-effort: tell the deployment so it can show the new status back to

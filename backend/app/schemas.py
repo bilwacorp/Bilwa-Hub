@@ -5,7 +5,8 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, field_serializer, field_validator
 
 from app.models import (
-    DeploymentStatus, MaintenanceWindowStatus, NotificationChannel, NotificationStatus, SupportTicketStatus,
+    DeploymentStatus, MaintenanceWindowStatus, NotificationChannel, NotificationStatus, OperationalEventStatus,
+    SupportTicketStatus,
 )
 
 # How hard an active maintenance window bites (MaintenanceWindow.mode):
@@ -467,3 +468,29 @@ class RoleUpdate(BaseModel):
 class RolePermissionsUpdate(BaseModel):
     # "resource.action" strings — replaces the role's full permission set.
     permissions: List[str]
+
+
+# ── operational events (HUB-Expansion.md Phase 1) ──────────────────────────
+
+class OperationalEventOut(BaseModel):
+    id: uuid.UUID
+    event_type: str
+    source: str
+    actor_type: str
+    actor_id: Optional[uuid.UUID]
+    entity_type: Optional[str]
+    entity_id: Optional[uuid.UUID]
+    deployment_id: Optional[uuid.UUID]
+    customer_id: Optional[uuid.UUID]
+    correlation_id: uuid.UUID
+    causation_id: Optional[uuid.UUID]
+    status: OperationalEventStatus
+    event_metadata: Optional[dict] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class OperationalEventListResponse(BaseModel):
+    total: int
+    items: List[OperationalEventOut]

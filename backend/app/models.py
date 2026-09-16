@@ -226,6 +226,68 @@ class MaintenanceWindow(Base):
     deployment: Mapped[Optional["Deployment"]] = relationship("Deployment")
 
 
+class OperationalEventStatus(str, enum.Enum):
+    """The event's own outcome — deliberately generic (not one value per
+    domain), so Phase 10's dashboard can bucket "everything that failed
+    today" across deployments/tickets/maintenance/approvals with one WHERE
+    clause instead of parsing event_type strings."""
+    info = "info"          # a fact was recorded — no success/failure to report (e.g. ticket.created)
+    pending = "pending"     # started, outcome not yet known (e.g. an approval was requested)
+    success = "success"
+    failure = "failure"
+
+
+class OperationalEvent(Base):
+    """Append-only cross-domain event log — HUB-Expansion.md Phase 1's "no
+    operational action should disappear into a black box" spine. See
+    docs/architecture/current-state.md for the full rationale; the short
+    version:
+
+    - Deliberately NOT a duplicate of WorkflowHistory (workflow/models.py),
+      which stays the detailed per-instance/per-task trail for the approval
+      engine. This table holds one coarser event per meaningful state
+      transition across *every* domain, so a fleet-wide or per-deployment
+      timeline (Phase 9) can query one table instead of hand-unioning every
+      domain table.
+    - entity_type/entity_id is a polymorphic reference with no FK — same
+      shape as WorkflowInstance.business_object_type/_id (workflow/
+      models.py) — because the referenced row can live in any table, or
+      (a hard-deleted MaintenanceWindow) no longer exist at all.
+    - event_type/source/actor_type/entity_type are plain strings, not
+      native Postgres enums like every other status-shaped column in this
+      codebase (see core/event_types.py's docstring for why: this catalog
+      is expected to grow with nearly every future HUB-Expansion.md phase,
+      and a native enum needs a migration per new value). `status` is a
+      genuinely small, closed set, so it stays a native enum for
+      consistency with the rest of the codebase.
+    - causation_id is nullable and, as of Phase 1, never populated — the
+      column is reserved for Phase 2's cross-system correlation chains
+      (ticket -> PR -> release -> deployment) once something upstream of
+      this hub (a GitHub/CI integration) exists to chain against.
+    - customer_id is nullable and, as of Phase 1, never populated — there
+      is no Customer table yet (see HUB-Expansion.md Phase 4); the column
+      exists now so it doesn't need a follow-up migration once one lands.
+    """
+    __tablename__ = "operational_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(50), nullable=False)
+    actor_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    actor_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    entity_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    entity_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    deployment_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("deployments.id"), nullable=True, index=True)
+    customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    correlation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    causation_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    status: Mapped[OperationalEventStatus] = mapped_column(Enum(OperationalEventStatus), default=OperationalEventStatus.info, nullable=False)
+    event_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    deployment: Mapped[Optional["Deployment"]] = relationship("Deployment")
+
+
 class NotificationChannel(str, enum.Enum):
     email = "email"
     whatsapp = "whatsapp"

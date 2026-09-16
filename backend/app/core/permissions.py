@@ -120,6 +120,11 @@ APPROVALS_ACT = ("approvals", "act")
 APPROVALS_REASSIGN = ("approvals", "reassign")
 APPROVALS_ACT_ANY = ("approvals", "act_any")   # act on a task you're not a candidate/assignee for
 
+# ── operational events (HUB-Expansion.md Phase 1 — see app/models.py's
+# OperationalEvent and api/routers/events.py) ───────────────────────────────
+EVENTS_VIEW = ("events", "view")
+EVENTS_VIEW_ALL = ("events", "view_all")
+
 # (resource, action, description) — the migration-seeded catalog. Order
 # here is also the order the admin UI's checkbox grid renders in within
 # each resource's group.
@@ -169,6 +174,8 @@ ALL_PERMISSIONS: list[tuple[str, str, str]] = [
     (*APPROVALS_ACT, "Approve or reject a task assigned/candidate to you"),
     (*APPROVALS_REASSIGN, "Reassign a pending approval task to another user"),
     (*APPROVALS_ACT_ANY, "Approve or reject any pending task, not just ones you're a candidate for"),
+    (*EVENTS_VIEW, "View the operational event log for deployments assigned to you (non-deployment events are always visible)"),
+    (*EVENTS_VIEW_ALL, "View the operational event log for every deployment"),
 ]
 
 

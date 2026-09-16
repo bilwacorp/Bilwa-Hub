@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutGrid, Ticket, CalendarClock, LogOut, Users, Bell, Menu, X, ShieldCheck, CheckSquare, Workflow } from 'lucide-react'
+import { LayoutGrid, Ticket, CalendarClock, LogOut, Users, Bell, Menu, X, ShieldCheck, CheckSquare, Workflow, History } from 'lucide-react'
 import { useAuthStore } from './stores/auth'
 import api from './lib/api'
 import { cn } from './lib/utils'
@@ -21,6 +21,7 @@ import WorkflowListPage from './pages/workflows/WorkflowListPage'
 import WorkflowDetailPage from './pages/workflows/WorkflowDetailPage'
 import WorkflowDesignerPage from './pages/workflows/WorkflowDesignerPage'
 import ApprovalRulesPage from './pages/workflows/ApprovalRulesPage'
+import EventsPage from './pages/events/EventsPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -53,6 +54,7 @@ const NAV_ITEMS = [
   { to: '/notifications', label: 'Notifications', icon: Bell, permission: 'notifications.view' },
   { to: '/approvals', label: 'Approvals', icon: CheckSquare, permission: 'approvals.view' },
   { to: '/workflows', label: 'Workflows', icon: Workflow, permission: 'workflows.view' },
+  { to: '/events', label: 'Events', icon: History, permission: 'events.view' },
 ] as const
 
 // Flush left accent bar rather than a filled pill — reads calmer against a
@@ -195,6 +197,7 @@ export default function App() {
       <Route path="/workflows/:id" element={<RequireAuth><RequirePermission permission="workflows.view"><Shell><WorkflowDetailPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/workflows/:id/versions/:versionId" element={<RequireAuth><RequirePermission permission="workflows.view"><Shell><WorkflowDesignerPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/workflow-rules" element={<RequireAuth><RequirePermission permission="workflow_rules.view"><Shell><ApprovalRulesPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/events" element={<RequireAuth><RequirePermission permission="events.view"><Shell><EventsPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="*" element={<Navigate to="/deployments" replace />} />
     </Routes>
   )

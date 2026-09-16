@@ -23,8 +23,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.approvals import hooks
+from app.core import event_types as et
 from app.core.permissions import has_permission
 from app.models import User
+from app.services.events import record_event
 from app.workflow import executor, repositories
 from app.workflow.models import WorkflowInstance, WorkflowTask
 
@@ -73,7 +75,7 @@ async def approve(db: AsyncSession, current_user: User, task_id: uuid.UUID, *, c
     )).scalar_one()
     data = await hooks.apply_pre_approve_transform(db, instance_row, task.step_key, data)
     instance = await executor.approve_task(db, current_user, task, comment=comment, data=data)
-    await hooks.fire_if_terminal(db, instance)
+    await hooks.fire_if_terminal(db, instance, actor=current_user)
     return instance
 
 
@@ -81,10 +83,18 @@ async def reject(db: AsyncSession, current_user: User, task_id: uuid.UUID, *, co
     task = await get_task(db, task_id)
     await _assert_can_act(db, current_user, task, act_any=act_any)
     instance = await executor.reject_task(db, current_user, task, comment=comment)
-    await hooks.fire_if_terminal(db, instance)
+    await hooks.fire_if_terminal(db, instance, actor=current_user)
     return instance
 
 
 async def reassign(db: AsyncSession, current_user: User, task_id: uuid.UUID, *, new_user_id: uuid.UUID, comment: Optional[str]) -> WorkflowTask:
     task = await get_task(db, task_id)
-    return await executor.reassign_task(db, current_user, task, new_user_id=new_user_id, comment=comment)
+    instance = await db.get(WorkflowInstance, task.instance_id)
+    reassigned = await executor.reassign_task(db, current_user, task, new_user_id=new_user_id, comment=comment)
+    record_event(
+        db, event_type=et.APPROVAL_REASSIGNED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF, actor_id=current_user.id,
+        entity_type=et.ENTITY_WORKFLOW_INSTANCE, entity_id=task.instance_id,
+        correlation_id=(instance.correlation_id if instance else None) or task.instance_id,
+        metadata={"task_id": str(task_id), "new_user_id": str(new_user_id)},
+    )
+    return reassigned

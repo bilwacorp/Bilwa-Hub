@@ -227,7 +227,7 @@ async def cancel_workflow_instance(
     from app.workflow import executor
     instance = await services.get_instance_scoped(db, instance_id)
     instance = await executor.cancel_instance(db, current_user, instance, comment=body.comment)
-    await hooks.fire_if_terminal(db, instance)
+    await hooks.fire_if_terminal(db, instance, actor=current_user)
     return instance
 
 

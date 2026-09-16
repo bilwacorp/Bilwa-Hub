@@ -8,12 +8,14 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import event_types as et
 from app.core.deps import get_deployment_from_api_key
 from app.db.session import get_db
 from app.models import Deployment, DeploymentSnapshot, SupportTicket
 from app.schemas import (
     HeartbeatRequest, HeartbeatResponse, MaintenanceWindowPublic, SupportTicketIngest,
 )
+from app.services.events import record_event
 from app.services.maintenance_query import active_windows_for
 from app.services.notification_triggers import (
     new_pending_requests, notify_subscription_request_raised, notify_support_ticket_raised,
@@ -54,6 +56,11 @@ async def ingest_heartbeat(
         # (datetime.utcnow at insert) — never trust the client's clock.
     )
     db.add(snapshot)
+    record_event(
+        db, event_type=et.DEPLOYMENT_HEARTBEAT_RECEIVED, source=et.SOURCE_DEPLOYMENT, actor_type=et.ACTOR_DEPLOYMENT,
+        actor_id=deployment.id, entity_type=et.ENTITY_DEPLOYMENT, entity_id=deployment.id, deployment_id=deployment.id,
+        metadata={"app_version": body.app_version},
+    )
     await db.flush()
 
     for request in new_pending_requests(previous, body.pending_requests):
@@ -83,5 +90,10 @@ async def ingest_support_ticket(
     db.add(ticket)
     await db.flush()
     await db.refresh(ticket)
+    record_event(
+        db, event_type=et.TICKET_CREATED, source=et.SOURCE_DEPLOYMENT, actor_type=et.ACTOR_DEPLOYMENT,
+        actor_id=deployment.id, entity_type=et.ENTITY_TICKET, entity_id=ticket.id, deployment_id=deployment.id,
+        metadata={"subject": ticket.subject, "priority": ticket.priority},
+    )
     await notify_support_ticket_raised(db, ticket, deployment)
     return {"ticket_id": str(ticket.id)}

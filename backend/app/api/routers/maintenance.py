@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import event_types as et
 from app.core.permissions import (
     MAINTENANCE_CREATE, MAINTENANCE_DELETE, MAINTENANCE_UPDATE, MAINTENANCE_VIEW, MAINTENANCE_VIEW_ALL,
     has_permission, require_permission,
@@ -22,6 +23,7 @@ from app.schemas import (
     MaintenanceWindowCreate, MaintenanceWindowListResponse, MaintenanceWindowOut, MaintenanceWindowUpdate,
 )
 from app.services.deployment_scope import assigned_deployment_ids
+from app.services.events import record_event
 from app.services.maintenance_push import clear_reminders, sync_window
 
 router = APIRouter(prefix="/maintenance-windows", tags=["maintenance"])
@@ -49,6 +51,11 @@ async def create_window(
     db.add(w)
     await db.flush()
     await db.refresh(w)
+    record_event(
+        db, event_type=et.MAINTENANCE_CREATED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF, actor_id=current_user.id,
+        entity_type=et.ENTITY_MAINTENANCE_WINDOW, entity_id=w.id, deployment_id=w.deployment_id,
+        metadata={"mode": w.mode, "scheduled_start": w.scheduled_start.isoformat()},
+    )
     await sync_window(db, w)
     return MaintenanceWindowOut.model_validate(w)
 
@@ -80,11 +87,17 @@ async def update_window(
 ):
     w = await _get_visible_or_404(db, window_id, current_user)
     old_start = w.scheduled_start
-    for field, value in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    for field, value in changes.items():
         setattr(w, field, value)
     if w.scheduled_start < old_start:
         # Moved earlier — let a fresh reminder fire against the new time.
         clear_reminders(w)
+    record_event(
+        db, event_type=et.MAINTENANCE_UPDATED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF, actor_id=current_user.id,
+        entity_type=et.ENTITY_MAINTENANCE_WINDOW, entity_id=w.id, deployment_id=w.deployment_id,
+        metadata={"changed_fields": list(changes.keys())},
+    )
     await db.flush()
     # Push the updated list to every affected deployment — a cancelled or
     # rescheduled window drops out of / changes in active_windows_for, so
@@ -102,6 +115,10 @@ async def delete_window(
     # Cancel-then-push while the row still exists (so it drops out of
     # active_windows_for and deployments prune it), then hard-delete.
     w.status = MaintenanceWindowStatus.cancelled
+    record_event(
+        db, event_type=et.MAINTENANCE_DELETED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF, actor_id=current_user.id,
+        entity_type=et.ENTITY_MAINTENANCE_WINDOW, entity_id=w.id, deployment_id=w.deployment_id,
+    )
     await db.flush()
     await sync_window(db, w)
     await db.delete(w)

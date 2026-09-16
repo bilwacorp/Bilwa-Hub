@@ -121,6 +121,13 @@ class WorkflowInstance(Base):
     business_object_type: Mapped[str] = mapped_column(String(50), nullable=False)
     business_object_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     status: Mapped[InstanceStatus] = mapped_column(Enum(InstanceStatus), default=InstanceStatus.running)
+    # Set once at start (see approvals/integration.py's start_approval) so
+    # every OperationalEvent tied to this instance's lifecycle — request,
+    # approve/reject, and (for deployment actions) the eventual
+    # deployment_client call — shares one correlation_id. Nullable only
+    # because an instance created before this column existed has none;
+    # every new instance gets one.
+    correlation_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     result: Mapped[Optional[str]] = mapped_column(Text)
     serialized_state: Mapped[Optional[dict]] = mapped_column(JSONB)
     serializer_version: Mapped[Optional[str]] = mapped_column(String(10))

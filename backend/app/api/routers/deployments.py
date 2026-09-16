@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import event_types as et
 from app.core.config import settings
 from app.core.permissions import (
     DEPLOYMENTS_ASSIGN_STAFF, DEPLOYMENTS_CHANGE_PLAN, DEPLOYMENTS_CHECK_HEALTH, DEPLOYMENTS_CREATE,
@@ -22,7 +23,8 @@ from app.core.permissions import (
 )
 from app.db.session import get_db
 from app.models import (
-    Deployment, DeploymentSnapshot, DeploymentStaffAssignment, DeploymentStatus, MaintenanceWindow, User,
+    Deployment, DeploymentSnapshot, DeploymentStaffAssignment, DeploymentStatus, MaintenanceWindow,
+    OperationalEventStatus, User,
 )
 from app.schemas import (
     ChangePlanActionRequest, DeploymentCreate, DeploymentCreateOut, DeploymentListResponse,
@@ -32,6 +34,7 @@ from app.schemas import (
 from app.approvals import deployment_hooks
 from app.services import deployment_client
 from app.services.deployment_scope import assigned_deployment_ids
+from app.services.events import record_event
 from app.services.maintenance_query import currently_active_windows
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
@@ -304,9 +307,20 @@ async def action_extend_expiry(
 ):
     d = await _get_visible_or_404(db, deployment_id, current_user)
     try:
-        return await deployment_client.extend_expiry(d, new_expiry_date=body.new_expiry_date.isoformat())
+        result = await deployment_client.extend_expiry(d, new_expiry_date=body.new_expiry_date.isoformat())
     except deployment_client.DeploymentCallError as e:
+        record_event(
+            db, event_type=et.DEPLOYMENT_EXPIRY_EXTEND_FAILED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF,
+            actor_id=current_user.id, entity_type=et.ENTITY_DEPLOYMENT, entity_id=d.id, deployment_id=d.id,
+            status=OperationalEventStatus.failure, metadata={"error": str(e)},
+        )
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+    record_event(
+        db, event_type=et.DEPLOYMENT_EXPIRY_EXTENDED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF,
+        actor_id=current_user.id, entity_type=et.ENTITY_DEPLOYMENT, entity_id=d.id, deployment_id=d.id,
+        status=OperationalEventStatus.success, metadata={"new_expiry_date": body.new_expiry_date.isoformat()},
+    )
+    return result
 
 
 @router.post("/{deployment_id}/actions/check-health")
@@ -319,9 +333,16 @@ async def action_check_health(
     on the list/detail pages."""
     d = await _get_visible_or_404(db, deployment_id, current_user)
     try:
-        return await deployment_client.check_health(d)
+        result = await deployment_client.check_health(d)
     except deployment_client.DeploymentCallError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+    record_event(
+        db, event_type=et.DEPLOYMENT_HEALTH_CHECK_COMPLETED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF,
+        actor_id=current_user.id, entity_type=et.ENTITY_DEPLOYMENT, entity_id=d.id, deployment_id=d.id,
+        status=OperationalEventStatus.success if result.get("api") else OperationalEventStatus.failure,
+        metadata=result,
+    )
+    return result
 
 
 @router.patch("/{deployment_id}/subscription-requests/{request_id}")
@@ -331,8 +352,19 @@ async def review_subscription_request(
 ):
     d = await _get_visible_or_404(db, deployment_id, current_user)
     try:
-        return await deployment_client.review_request(
+        result = await deployment_client.review_request(
             d, request_id=request_id, status=body.status, review_note=body.review_note,
         )
     except deployment_client.DeploymentCallError as e:
+        record_event(
+            db, event_type=et.DEPLOYMENT_SUBSCRIPTION_REQUEST_REVIEW_FAILED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF,
+            actor_id=current_user.id, entity_type=et.ENTITY_DEPLOYMENT, entity_id=d.id, deployment_id=d.id,
+            status=OperationalEventStatus.failure, metadata={"request_id": request_id, "error": str(e)},
+        )
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+    record_event(
+        db, event_type=et.DEPLOYMENT_SUBSCRIPTION_REQUEST_REVIEWED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF,
+        actor_id=current_user.id, entity_type=et.ENTITY_DEPLOYMENT, entity_id=d.id, deployment_id=d.id,
+        status=OperationalEventStatus.success, metadata={"request_id": request_id, "review_status": body.status},
+    )
+    return result
