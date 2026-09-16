@@ -6,6 +6,7 @@ import axios from 'axios'
 import { RotateCw, Send, Trash2 } from 'lucide-react'
 import api from '../../lib/api'
 import { formatDate } from '../../lib/utils'
+import { useAuthStore } from '../../stores/auth'
 import { DataTable, type Column } from '../../components/ui/DataTable'
 import { Badge } from '../../components/ui/Badge'
 import { Modal } from '../../components/ui/Modal'
@@ -31,6 +32,7 @@ function errorDetail(e: unknown): string | undefined {
 
 export default function NotificationsPage() {
   const qc = useQueryClient()
+  const can = useAuthStore((s) => s.can)
   const [statusFilter, setStatusFilter] = useState('')
   const [channelFilter, setChannelFilter] = useState('')
   const [recipientFilter, setRecipientFilter] = useState('')
@@ -97,7 +99,7 @@ export default function NotificationsPage() {
       key: 'actions', header: '', className: 'text-right',
       render: (n) => (
         <div className="flex justify-end gap-1">
-          {(n.status === 'failed' || n.status === 'cancelled') && (
+          {can('notifications.resend') && (n.status === 'failed' || n.status === 'cancelled') && (
             <Button size="sm" variant="ghost" icon={<RotateCw size={14} />} loading={resendMutation.isPending} onClick={() => resendMutation.mutate(n.id)}>Resend</Button>
           )}
           <Button size="sm" variant="secondary" onClick={() => setDetail(n)}>Details</Button>
@@ -110,10 +112,12 @@ export default function NotificationsPage() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold text-text">Notifications</h1>
-        <div className="flex gap-2">
-          <Button variant="secondary" icon={<Send size={15} />} onClick={() => setShowTestEmail(true)}>Test email</Button>
-          <Button variant="secondary" icon={<Send size={15} />} onClick={() => setShowTestWhatsApp(true)}>Test WhatsApp</Button>
-        </div>
+        {can('notifications.test_send') && (
+          <div className="flex gap-2">
+            <Button variant="secondary" icon={<Send size={15} />} onClick={() => setShowTestEmail(true)}>Test email</Button>
+            <Button variant="secondary" icon={<Send size={15} />} onClick={() => setShowTestWhatsApp(true)}>Test WhatsApp</Button>
+          </div>
+        )}
       </div>
 
       <div className="flex gap-3 mb-4">
@@ -143,8 +147,10 @@ export default function NotificationsPage() {
         open={!!detail} onClose={() => setDetail(null)} title="Notification detail" size="md"
         footer={detail && (
           <>
-            <Button variant="danger" icon={<Trash2 size={14} />} loading={deleteMutation.isPending} onClick={() => deleteMutation.mutate(detail.id)}>Delete</Button>
-            {(detail.status === 'failed' || detail.status === 'cancelled') && (
+            {can('notifications.delete') && (
+              <Button variant="danger" icon={<Trash2 size={14} />} loading={deleteMutation.isPending} onClick={() => deleteMutation.mutate(detail.id)}>Delete</Button>
+            )}
+            {can('notifications.resend') && (detail.status === 'failed' || detail.status === 'cancelled') && (
               <Button icon={<RotateCw size={14} />} loading={resendMutation.isPending} onClick={() => resendMutation.mutate(detail.id)}>Resend</Button>
             )}
           </>

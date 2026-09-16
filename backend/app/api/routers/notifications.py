@@ -1,5 +1,8 @@
 """Admin visibility into services/notifications/ — history, resend, delete,
-and real test sends. Gated by NOTIFICATIONS_MANAGE — see core/permissions.py."""
+and real test sends. One permission per action (see core/permissions.py) —
+no row-level scoping here (unlike deployments/tickets/maintenance): a
+notification log isn't tied to a single deployment the same way, so it's
+not scoped by DeploymentStaffAssignment."""
 import json
 import uuid
 from typing import Optional
@@ -7,7 +10,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.permissions import NOTIFICATIONS_MANAGE, require_permission
+from app.core.permissions import (
+    NOTIFICATIONS_DELETE, NOTIFICATIONS_RESEND, NOTIFICATIONS_TEST_SEND, NOTIFICATIONS_VIEW, require_permission,
+)
 from app.db.session import get_db
 from app.models import NotificationChannel, NotificationStatus
 from app.schemas import (
@@ -19,10 +24,7 @@ from app.services.notifications.dependencies import get_notification_service
 from app.services.notifications.service import NotificationService
 from app.services.notifications.tasks import send_email_task, send_whatsapp_task
 
-router = APIRouter(
-    prefix="/notifications", tags=["notifications"],
-    dependencies=[Depends(require_permission(*NOTIFICATIONS_MANAGE))],
-)
+router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 
 async def _get_log_or_404(db: AsyncSession, notification_id: uuid.UUID):
@@ -41,6 +43,7 @@ async def list_notifications(
     channel: Optional[NotificationChannel] = None,
     recipient: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission(*NOTIFICATIONS_VIEW)),
 ):
     total, items = await repository.list_logs(
         db, page=page, page_size=page_size, status=status, channel=channel, recipient=recipient
@@ -52,6 +55,7 @@ async def list_notifications(
 async def send_test_email(
     body: TestEmailRequest,
     service: NotificationService = Depends(get_notification_service),
+    current_user=Depends(require_permission(*NOTIFICATIONS_TEST_SEND)),
 ):
     log = await service.send_custom(
         recipient=body.recipient,
@@ -76,6 +80,7 @@ async def send_test_email(
 async def send_test_whatsapp(
     body: TestWhatsAppRequest,
     service: NotificationService = Depends(get_notification_service),
+    current_user=Depends(require_permission(*NOTIFICATIONS_TEST_SEND)),
 ):
     log = await service.send_whatsapp_message(recipient=body.recipient, message=body.message)
     return NotificationSendResponse(notification_id=log.id, status=log.status)
@@ -85,6 +90,7 @@ async def send_test_whatsapp(
 async def resend_notification(
     notification_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission(*NOTIFICATIONS_RESEND)),
 ):
     log = await _get_log_or_404(db, notification_id)
     context = json.loads(log.payload) if log.payload else {}
@@ -123,6 +129,7 @@ async def resend_notification(
 async def get_notification(
     notification_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission(*NOTIFICATIONS_VIEW)),
 ):
     return await _get_log_or_404(db, notification_id)
 
@@ -131,6 +138,7 @@ async def get_notification(
 async def delete_notification(
     notification_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission(*NOTIFICATIONS_DELETE)),
 ):
     log = await _get_log_or_404(db, notification_id)
     await repository.delete_log(db, log)

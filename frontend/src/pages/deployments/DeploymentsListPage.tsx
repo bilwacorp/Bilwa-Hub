@@ -6,6 +6,7 @@ import toast from 'react-hot-toast'
 import { Plus, Copy } from 'lucide-react'
 import api from '../../lib/api'
 import { formatDate } from '../../lib/utils'
+import { useAuthStore } from '../../stores/auth'
 import { DataTable, type Column } from '../../components/ui/DataTable'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
@@ -29,6 +30,7 @@ function healthDot(d: Deployment): { color: string; label: string } {
 export default function DeploymentsListPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
+  const can = useAuthStore((s) => s.can)
   const { data, isLoading } = useQuery({
     queryKey: ['deployments'],
     queryFn: () => api.get<DeploymentListResponse>('/deployments').then((r) => r.data),
@@ -76,7 +78,9 @@ export default function DeploymentsListPage() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold text-text">Deployments</h1>
-        <Button icon={<Plus size={15} />} onClick={() => setShowCreate(true)}>New Deployment</Button>
+        {can('deployments.create') && (
+          <Button icon={<Plus size={15} />} onClick={() => setShowCreate(true)}>New Deployment</Button>
+        )}
       </div>
       <DataTable
         columns={columns} data={data?.items ?? []} loading={isLoading} keyExtractor={(d) => d.id}

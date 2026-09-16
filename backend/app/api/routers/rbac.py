@@ -1,10 +1,11 @@
 """Roles & Permissions admin UI — the permission catalog is read-only here
-(seeded by migration, see core/permissions.py's ALL_PERMISSIONS); this
-router only lets an admin create/rename/delete *roles* and change which
-catalog permissions each one holds. Gated by RBAC_MANAGE, granted to
-'admin' only at cutover (migration 010_rbac_catalog) — whoever holds it
-can grant themselves or anyone else any other permission, so it's
-deliberately not handed out by default the way FLEET_MANAGE is."""
+(seeded by migration, see core/permissions.py's ALL_PERMISSIONS). RBAC_VIEW
+gates read-only endpoints (list the catalog, list roles, view a role's
+permissions); RBAC_MANAGE gates every mutation (create/rename/delete a
+role, change a role's permissions). Both are granted to 'admin' only at
+cutover — whoever holds RBAC_MANAGE can grant themselves or anyone else
+any other permission, so it's deliberately not handed out by default the
+way the other resources' base permissions are."""
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,13 +13,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.permissions import RBAC_MANAGE, require_permission
+from app.core.permissions import RBAC_MANAGE, RBAC_VIEW, require_permission
 from app.db.session import get_db
 from app.models import Role
 from app.schemas import PermissionOut, RoleCreate, RoleOut, RolePermissionsUpdate, RoleUpdate
 from app.services import rbac
 
-router = APIRouter(prefix="/rbac", tags=["rbac"], dependencies=[Depends(require_permission(*RBAC_MANAGE))])
+router = APIRouter(prefix="/rbac", tags=["rbac"])
 
 
 async def _get_role_or_404(db: AsyncSession, role_id: uuid.UUID) -> Role:
@@ -41,17 +42,17 @@ def _parse_permission_strings(raw: list[str]) -> list[tuple[str, str]]:
 
 
 @router.get("/permissions", response_model=list[PermissionOut])
-async def list_permissions(db: AsyncSession = Depends(get_db)):
+async def list_permissions(db: AsyncSession = Depends(get_db), current_user=Depends(require_permission(*RBAC_VIEW))):
     return await rbac.list_permissions_catalog(db)
 
 
 @router.get("/roles", response_model=list[RoleOut])
-async def list_roles(db: AsyncSession = Depends(get_db)):
+async def list_roles(db: AsyncSession = Depends(get_db), current_user=Depends(require_permission(*RBAC_VIEW))):
     return await rbac.list_roles(db)
 
 
 @router.post("/roles", response_model=RoleOut, status_code=201)
-async def create_role(body: RoleCreate, db: AsyncSession = Depends(get_db)):
+async def create_role(body: RoleCreate, db: AsyncSession = Depends(get_db), current_user=Depends(require_permission(*RBAC_MANAGE))):
     role = Role(name=body.name, description=body.description, is_system=False)
     db.add(role)
     try:
@@ -62,7 +63,7 @@ async def create_role(body: RoleCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.patch("/roles/{role_id}", response_model=RoleOut)
-async def update_role(role_id: uuid.UUID, body: RoleUpdate, db: AsyncSession = Depends(get_db)):
+async def update_role(role_id: uuid.UUID, body: RoleUpdate, db: AsyncSession = Depends(get_db), current_user=Depends(require_permission(*RBAC_MANAGE))):
     role = await _get_role_or_404(db, role_id)
     if body.name is not None and body.name != role.name:
         if role.is_system:
@@ -83,7 +84,7 @@ async def update_role(role_id: uuid.UUID, body: RoleUpdate, db: AsyncSession = D
 
 
 @router.delete("/roles/{role_id}", status_code=204)
-async def delete_role(role_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def delete_role(role_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user=Depends(require_permission(*RBAC_MANAGE))):
     role = await _get_role_or_404(db, role_id)
     if role.is_system:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Built-in roles can't be deleted")
@@ -104,13 +105,13 @@ async def delete_role(role_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/roles/{role_id}/permissions", response_model=list[str])
-async def get_role_permissions(role_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_role_permissions(role_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user=Depends(require_permission(*RBAC_VIEW))):
     role = await _get_role_or_404(db, role_id)
     return [f"{r}.{a}" for r, a in await rbac.get_permissions_for_role(role.name)]
 
 
 @router.put("/roles/{role_id}/permissions", response_model=list[str])
-async def set_role_permissions(role_id: uuid.UUID, body: RolePermissionsUpdate, db: AsyncSession = Depends(get_db)):
+async def set_role_permissions(role_id: uuid.UUID, body: RolePermissionsUpdate, db: AsyncSession = Depends(get_db), current_user=Depends(require_permission(*RBAC_MANAGE))):
     role = await _get_role_or_404(db, role_id)
     desired = _parse_permission_strings(body.permissions)
 

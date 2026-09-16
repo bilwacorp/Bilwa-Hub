@@ -251,8 +251,8 @@ class DeploymentSnapshotOut(BaseModel):
 class StaffOptionOut(BaseModel):
     """Minimal staff shape for a picker — deliberately not the full
     StaffUserOut (role/is_active/created_at), since this is exposed to
-    anyone with DEPLOYMENTS_MANAGE, not just STAFF_MANAGE (admin-only, see
-    api/routers/users.py)."""
+    anyone with DEPLOYMENTS_ASSIGN_STAFF, not the STAFF_VIEW/STAFF_* set
+    (see api/routers/users.py)."""
     id: uuid.UUID
     username: str
     full_name: Optional[str]

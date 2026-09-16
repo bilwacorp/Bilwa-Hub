@@ -6,29 +6,21 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.casbin_enforcer import get_enforcer
-from app.core.permissions import (
-    DEFAULT_DOMAIN, DEPLOYMENTS_MANAGE, MAINTENANCE_MANAGE, NOTIFICATIONS_MANAGE, TICKETS_MANAGE,
-)
+from app.core.permissions import DEFAULT_DOMAIN, DEPLOYMENTS_VIEW_ALL
 from app.models import DeploymentStaffAssignment, User
-
-# Every active user holding *any* of these — not a hardcoded 'admin'/
-# 'engineer' role-name check, which broke down the moment custom roles
-# existed (migration 010_rbac_catalog): a new role scoped to just
-# tickets.manage would've silently never heard about anything. Checking
-# permissions directly means any role an admin grants fleet-area access to
-# is automatically included, with no extra wiring.
-_FLEET_PERMISSIONS = (DEPLOYMENTS_MANAGE, TICKETS_MANAGE, MAINTENANCE_MANAGE, NOTIFICATIONS_MANAGE)
 
 
 async def fleet_staff(db: AsyncSession) -> list[User]:
-    """Every active user who can reach at least one fleet-area permission
-    through whatever role they hold — the fallback used by
-    recipients_for_deployment below when a deployment has no staff
-    explicitly assigned."""
+    """Every active user holding DEPLOYMENTS_VIEW_ALL — the fallback used
+    by recipients_for_deployment below when a deployment has no staff
+    explicitly assigned. Deliberately *not* "everyone with any fleet-area
+    permission": since migration 011, a role without view_all can't reach
+    an unassigned deployment's page (or its tickets/requests) at all — so
+    notifying such a user about it would send them a link to something
+    they'd 404 on. Only view_all holders can actually see an unassigned
+    deployment, so only they're notified about one."""
     enforcer = get_enforcer()
-    role_names: set[str] = set()
-    for resource, action in _FLEET_PERMISSIONS:
-        role_names.update(row[0] for row in enforcer.get_filtered_policy(1, DEFAULT_DOMAIN, resource, action))
+    role_names = {row[0] for row in enforcer.get_filtered_policy(1, DEFAULT_DOMAIN, *DEPLOYMENTS_VIEW_ALL)}
     user_ids: set[uuid.UUID] = set()
     for role in role_names:
         for raw_id in await enforcer.get_users_for_role_in_domain(role, DEFAULT_DOMAIN):

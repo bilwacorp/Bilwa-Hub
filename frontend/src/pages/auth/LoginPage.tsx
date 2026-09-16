@@ -11,6 +11,18 @@ import { PasswordInput } from '../../components/ui/PasswordInput'
 
 type LoginForm = { username: string; password: string }
 
+// Same order as App.tsx's sidebar nav — land on the first page this user
+// actually has permission for, not always /deployments (a role scoped to
+// e.g. just notifications would otherwise land on a "no access" page).
+const LANDING_PAGES: { permission: string; path: string }[] = [
+  { permission: 'deployments.view', path: '/deployments' },
+  { permission: 'tickets.view', path: '/tickets' },
+  { permission: 'maintenance.view', path: '/maintenance-windows' },
+  { permission: 'notifications.view', path: '/notifications' },
+  { permission: 'staff.view', path: '/users' },
+  { permission: 'rbac.manage', path: '/roles' },
+]
+
 export default function LoginPage() {
   const navigate = useNavigate()
   const setUser = useAuthStore((s) => s.setUser)
@@ -21,7 +33,9 @@ export default function LoginPage() {
     onSuccess: async () => {
       const me = await api.get('/auth/me')
       setUser(me.data)
-      navigate('/deployments')
+      const permissions: string[] = me.data.permissions ?? []
+      const landing = LANDING_PAGES.find((p) => permissions.includes(p.permission))
+      navigate(landing?.path ?? '/deployments')
     },
     onError: (e) => {
       const detail = axios.isAxiosError(e) ? (e.response?.data as { detail?: string })?.detail : undefined

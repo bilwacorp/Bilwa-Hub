@@ -57,11 +57,14 @@ to this package:
 All three fan out via `recipients_for_deployment()` (`recipients.py`): the staff
 explicitly assigned to that deployment (Deployments → a deployment →
 "Assigned Staff", `DeploymentStaffAssignment` / `PUT /deployments/{id}/staff`)
-if any, otherwise every active `fleet_staff()` holder (anyone holding
-`deployments.manage`, `tickets.manage`, `maintenance.manage`, or
-`notifications.manage` — see `core/permissions.py`) — an unassigned
-deployment still notifies everyone rather than going silent. One email per
-recipient with an email on file, one WhatsApp message per recipient with a
+if any, otherwise every active `fleet_staff()` holder — anyone holding
+`deployments.view_all` (see `core/permissions.py`), not a broader
+fleet-area check: since migration `011_granular_permissions`, a role
+without `view_all` can't reach an unassigned deployment's page at all, so
+notifying one would just send a dead link. An unassigned deployment with
+at least one `view_all` holder still notifies them rather than going
+silent. One email per recipient with an email on file, one WhatsApp
+message per recipient with a
 phone on file (`User.phone`, set from the Staff page).
 
 One more trigger lives outside `notification_triggers.py`, called directly

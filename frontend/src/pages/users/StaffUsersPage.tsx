@@ -26,6 +26,8 @@ function errorDetail(e: unknown): string | undefined {
 export default function StaffUsersPage() {
   const qc = useQueryClient()
   const currentUserId = useAuthStore((s) => s.user?.id)
+  const can = useAuthStore((s) => s.can)
+  const canUpdate = can('staff.update')
 
   const { data, isLoading } = useQuery({
     queryKey: ['staff-users'],
@@ -79,7 +81,7 @@ export default function StaffUsersPage() {
           type="email"
           defaultValue={u.email ?? ''}
           placeholder="name@example.com"
-          disabled={patchMutation.isPending}
+          disabled={!canUpdate || patchMutation.isPending}
           onBlur={(e) => {
             const v = e.target.value.trim()
             if (v !== (u.email ?? '')) patchMutation.mutate({ id: u.id, body: { email: v || null } })
@@ -94,7 +96,7 @@ export default function StaffUsersPage() {
           className="h-8 text-xs w-36"
           defaultValue={u.phone ?? ''}
           placeholder="+91XXXXXXXXXX"
-          disabled={patchMutation.isPending}
+          disabled={!canUpdate || patchMutation.isPending}
           onBlur={(e) => {
             const v = e.target.value.trim()
             if (v !== (u.phone ?? '')) patchMutation.mutate({ id: u.id, body: { phone: v || null } })
@@ -110,7 +112,7 @@ export default function StaffUsersPage() {
           <Select
             className="h-8 text-xs w-auto"
             value={u.role ?? ''}
-            disabled={isSelf || patchMutation.isPending}
+            disabled={!canUpdate || isSelf || patchMutation.isPending}
             options={roleOptions}
             onChange={(e) => patchMutation.mutate({ id: u.id, body: { role: e.target.value } })}
             aria-label={`Role for ${u.username}`}
@@ -130,15 +132,19 @@ export default function StaffUsersPage() {
         const isSelf = u.id === currentUserId
         return (
           <div className="flex justify-end gap-1">
-            <Button size="sm" variant="ghost" icon={<KeyRound size={14} />} onClick={() => setResetTarget(u)}>Reset password</Button>
-            <Button
-              size="sm" variant="ghost"
-              disabled={isSelf}
-              title={isSelf ? 'Ask another admin to deactivate your account' : undefined}
-              onClick={() => patchMutation.mutate({ id: u.id, body: { is_active: !u.is_active } })}
-            >
-              {u.is_active ? 'Deactivate' : 'Reactivate'}
-            </Button>
+            {can('staff.reset_password') && (
+              <Button size="sm" variant="ghost" icon={<KeyRound size={14} />} onClick={() => setResetTarget(u)}>Reset password</Button>
+            )}
+            {canUpdate && (
+              <Button
+                size="sm" variant="ghost"
+                disabled={isSelf}
+                title={isSelf ? 'Ask another admin to deactivate your account' : undefined}
+                onClick={() => patchMutation.mutate({ id: u.id, body: { is_active: !u.is_active } })}
+              >
+                {u.is_active ? 'Deactivate' : 'Reactivate'}
+              </Button>
+            )}
           </div>
         )
       },
@@ -149,7 +155,9 @@ export default function StaffUsersPage() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold text-text">Staff</h1>
-        <Button icon={<Plus size={15} />} onClick={() => setShowCreate(true)}>New Staff Account</Button>
+        {can('staff.create') && (
+          <Button icon={<Plus size={15} />} onClick={() => setShowCreate(true)}>New Staff Account</Button>
+        )}
       </div>
       <DataTable columns={columns} data={data?.items ?? []} loading={isLoading} keyExtractor={(u) => u.id} emptyMessage="No staff accounts yet." />
 

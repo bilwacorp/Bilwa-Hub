@@ -7,6 +7,7 @@ import axios from 'axios'
 import { RotateCw } from 'lucide-react'
 import api from '../../lib/api'
 import { formatDate } from '../../lib/utils'
+import { useAuthStore } from '../../stores/auth'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Modal } from '../../components/ui/Modal'
@@ -43,6 +44,7 @@ function HealthRow({ label, ok, latencyMs }: { label: string; ok: boolean; laten
 export default function DeploymentDetailPage() {
   const { deploymentId } = useParams<{ deploymentId: string }>()
   const qc = useQueryClient()
+  const can = useAuthStore((s) => s.can)
 
   const { data: d } = useQuery({
     queryKey: ['deployment', deploymentId],
@@ -52,9 +54,11 @@ export default function DeploymentDetailPage() {
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['deployment', deploymentId] })
 
+  const canAssignStaff = can('deployments.assign_staff')
   const { data: staffOptions } = useQuery({
     queryKey: ['staff-options'],
     queryFn: () => api.get<StaffOption[]>('/deployments/staff-options').then((r) => r.data),
+    enabled: canAssignStaff,
   })
 
   // Local, editable copy of the assignment set — initialized once from the
@@ -132,44 +136,51 @@ export default function DeploymentDetailPage() {
         <p className="text-sm text-muted font-mono">{d.slug} · {d.base_url ?? 'not yet registered'}</p>
       </div>
 
-      <div className="bg-surface border border-border rounded-lg p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-text">Assigned Staff</h3>
-          {staffDirty && (
-            <div className="flex gap-2">
-              <Button size="sm" variant="ghost" onClick={() => setSelectedStaffIds(savedStaffIds)}>Cancel</Button>
-              <Button
-                size="sm" loading={assignStaffMutation.isPending}
-                onClick={() => selectedStaffIds && assignStaffMutation.mutate(selectedStaffIds)}
-              >
-                Save
-              </Button>
-            </div>
-          )}
+      {canAssignStaff ? (
+        <div className="bg-surface border border-border rounded-lg p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-text">Assigned Staff</h3>
+            {staffDirty && (
+              <div className="flex gap-2">
+                <Button size="sm" variant="ghost" onClick={() => setSelectedStaffIds(savedStaffIds)}>Cancel</Button>
+                <Button
+                  size="sm" loading={assignStaffMutation.isPending}
+                  onClick={() => selectedStaffIds && assignStaffMutation.mutate(selectedStaffIds)}
+                >
+                  Save
+                </Button>
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-muted mb-3">
+            Ticket and renewal/upgrade-request alerts for this deployment go only to staff checked here.
+            Leave nothing checked to notify every fleet staff member instead (the default).
+          </p>
+          <div className="flex flex-wrap gap-x-6 gap-y-2">
+            {(staffOptions ?? []).map((s) => (
+              <label key={s.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selectedStaffIds?.includes(s.id) ?? false}
+                  onChange={(e) => {
+                    setSelectedStaffIds((prev) => {
+                      const base = prev ?? []
+                      return e.target.checked ? [...base, s.id] : base.filter((id) => id !== s.id)
+                    })
+                  }}
+                />
+                {s.full_name || s.username}
+              </label>
+            ))}
+            {staffOptions?.length === 0 && <p className="text-sm text-muted">No staff accounts yet.</p>}
+          </div>
         </div>
-        <p className="text-xs text-muted mb-3">
-          Ticket and renewal/upgrade-request alerts for this deployment go only to staff checked here.
-          Leave nothing checked to notify every fleet staff member instead (the default).
-        </p>
-        <div className="flex flex-wrap gap-x-6 gap-y-2">
-          {(staffOptions ?? []).map((s) => (
-            <label key={s.id} className="flex items-center gap-2 text-sm cursor-pointer">
-              <input
-                type="checkbox"
-                checked={selectedStaffIds?.includes(s.id) ?? false}
-                onChange={(e) => {
-                  setSelectedStaffIds((prev) => {
-                    const base = prev ?? []
-                    return e.target.checked ? [...base, s.id] : base.filter((id) => id !== s.id)
-                  })
-                }}
-              />
-              {s.full_name || s.username}
-            </label>
-          ))}
-          {staffOptions?.length === 0 && <p className="text-sm text-muted">No staff accounts yet.</p>}
+      ) : d.assigned_staff.length > 0 && (
+        <div className="bg-surface border border-border rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-text mb-2">Assigned Staff</h3>
+          <p className="text-sm text-text">{d.assigned_staff.map((s) => s.full_name || s.username).join(', ')}</p>
         </div>
-      </div>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="bg-surface border border-border rounded-lg p-4">
@@ -193,14 +204,16 @@ export default function DeploymentDetailPage() {
       <div className="bg-surface border border-border rounded-lg p-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-text">Live Health Check</h3>
-          <Button
-            size="sm" variant="secondary"
-            icon={<RotateCw size={13} />}
-            loading={healthCheckMutation.isPending}
-            onClick={() => healthCheckMutation.mutate()}
-          >
-            Check now
-          </Button>
+          {can('deployments.check_health') && (
+            <Button
+              size="sm" variant="secondary"
+              icon={<RotateCw size={13} />}
+              loading={healthCheckMutation.isPending}
+              onClick={() => healthCheckMutation.mutate()}
+            >
+              Check now
+            </Button>
+          )}
         </div>
         {health ? (
           <div className="space-y-2">
@@ -217,10 +230,10 @@ export default function DeploymentDetailPage() {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Button variant="secondary" onClick={() => setShowRenew(true)}>Renew</Button>
-        <Button variant="secondary" onClick={() => setShowChangePlan(true)}>Change Plan</Button>
-        <Button variant="secondary" onClick={() => setShowExtend(true)}>Extend Expiry</Button>
-        <Button variant="danger" onClick={() => setShowSuspend(true)}>Suspend</Button>
+        {can('deployments.renew') && <Button variant="secondary" onClick={() => setShowRenew(true)}>Renew</Button>}
+        {can('deployments.change_plan') && <Button variant="secondary" onClick={() => setShowChangePlan(true)}>Change Plan</Button>}
+        {can('deployments.extend_expiry') && <Button variant="secondary" onClick={() => setShowExtend(true)}>Extend Expiry</Button>}
+        {can('deployments.suspend') && <Button variant="danger" onClick={() => setShowSuspend(true)}>Suspend</Button>}
       </div>
 
       {snap && (
@@ -248,10 +261,12 @@ export default function DeploymentDetailPage() {
                 {r.message && <div className="text-sm text-muted italic mt-1">"{r.message}"</div>}
                 <div className="text-xs text-muted mt-1">{formatDate(r.requested_at)}</div>
               </div>
-              <div className="flex gap-2 shrink-0">
-                <Button size="sm" variant="secondary" loading={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ requestId: r.id, status: 'actioned' })}>Mark Actioned</Button>
-                <Button size="sm" variant="ghost" onClick={() => reviewMutation.mutate({ requestId: r.id, status: 'rejected' })}>Reject</Button>
-              </div>
+              {can('deployments.review_request') && (
+                <div className="flex gap-2 shrink-0">
+                  <Button size="sm" variant="secondary" loading={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ requestId: r.id, status: 'actioned' })}>Mark Actioned</Button>
+                  <Button size="sm" variant="ghost" onClick={() => reviewMutation.mutate({ requestId: r.id, status: 'rejected' })}>Reject</Button>
+                </div>
+              )}
             </div>
           ))}
           {(snap?.pending_requests ?? []).length === 0 && <p className="text-sm text-muted">No pending requests.</p>}

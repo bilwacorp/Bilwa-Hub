@@ -127,10 +127,16 @@ core/permissions.py   ALL_PERMISSIONS — the six-permission catalog (staff/depl
 core/casbin_enforcer.py, core/casbin_watcher.py, core/rbac_model.conf
                       Ported near-verbatim from PoultryOS-CBP — generic, no app-specific
                       content in rbac_model.conf.
-services/rbac.py      Role assignment for staff users (get_role/set_role/count_active_admins)
-                      on top of the Casbin enforcer's domain-aware RBAC API — see
-                      api/routers/users.py. A user's role lives only as a Casbin `g` grouping
-                      row, not a column on User.
+services/rbac.py      Role assignment for staff users (get_role/set_role) plus the RBAC
+                      catalog/role CRUD backing api/routers/rbac.py (list_roles,
+                      get/set_role_permissions, rename/delete-role policy rewrites,
+                      count_users_with_permission, would_orphan_permission) — all on top of
+                      the Casbin enforcer's domain-aware RBAC API. A user's role lives only
+                      as a Casbin `g` grouping row, not a column on User.
+services/deployment_scope.py
+                      assigned_deployment_ids(db, user_id) — the one query every row-level
+                      visibility check (deployments.py/tickets.py/maintenance.py) shares.
+                      See "The permission model" above.
 services/crypto.py    Fernet encrypt/decrypt for Deployment.action_key_encrypted — mirrors
                       PoultryOS-CBP's User.totp_secret_encrypted pattern (reversible storage
                       is the exception, not the rule; see "Two credentials" below).
@@ -161,9 +167,10 @@ services/notification_triggers.py
                       Deployment.expiry_reminder_sent_for). All three fan out via
                       recipients.recipients_for_deployment() — a deployment's explicitly
                       assigned staff (DeploymentStaffAssignment) if any, else every active
-                      user holding a fleet-area permission (recipients.fleet_staff(), see
-                      "The permission model") — to whichever of email/WhatsApp each
-                      recipient has on file (User.email / User.phone).
+                      deployments.view_all holder (recipients.fleet_staff() — only they can
+                      actually see an unassigned deployment at all, see "The permission
+                      model") — to whichever of email/WhatsApp each recipient has on file
+                      (User.email / User.phone).
 api/routers/
   auth.py             login/logout/refresh/me — MFA, phone/WhatsApp OTP, and mobile
                       refresh-token pairing all dropped (ported subset only). Self-service
@@ -177,24 +184,33 @@ api/routers/
   register.py         POST /register — public, single-use registration_token auth, not JWT
   ingest.py            POST /ingest/heartbeat, POST /ingest/support-ticket — api_key bearer
                       auth (hash-compared against Deployment.api_key_hash)
-  deployments.py        DEPLOYMENTS_MANAGE: create pending deployment + token,
-                      list, detail (+ latest snapshot), reissue-token, the inbound-action
-                      triggers (renew/suspend/change-plan/extend-expiry/review-request), and
-                      GET staff-options / PUT {id}/staff (assign staff to a deployment — narrows
-                      that deployment's notification fan-out, see services/notifications/
-                      recipients.py). staff-options is registered ahead of GET /{deployment_id}
-                      so the literal path segment isn't swallowed by the dynamic one.
-  tickets.py            TICKETS_MANAGE: list/detail/update support tickets
-  maintenance.py        MAINTENANCE_MANAGE: plain CRUD on maintenance windows, no automation
-  users.py              STAFF_MANAGE: staff account CRUD (deactivate, not hard
-                      delete — MaintenanceWindow.created_by FKs to users.id) + role
-                      assignment. Guards against self-lockout (can't deactivate/change your
-                      own role) and against dropping the last active staff.manage holder.
-  notifications.py      NOTIFICATIONS_MANAGE: notification history (list/detail/resend/delete) +
-                      test-email/test-whatsapp — see services/notifications/README.md.
-  rbac.py               RBAC_MANAGE (admin only at cutover): the Roles & Permissions admin
-                      feature itself — permission catalog (read-only), role CRUD, and
-                      get/set a role's permission set. See "The permission model" above.
+  deployments.py        One permission per action (deployments.view/view_all/create/renew/
+                      suspend/change_plan/extend_expiry/check_health/review_request/
+                      assign_staff): create pending deployment + token, list, detail
+                      (+ latest snapshot), reissue-token, the inbound-action triggers, and
+                      GET staff-options / PUT {id}/staff (narrows that deployment's
+                      notification fan-out, see services/notifications/recipients.py).
+                      staff-options is registered ahead of GET /{deployment_id} so the
+                      literal path segment isn't swallowed by the dynamic one. Every route
+                      taking a deployment_id 404s via _get_visible_or_404 if the caller
+                      isn't assigned to it and lacks deployments.view_all — see "The
+                      permission model" above.
+  tickets.py            tickets.view/view_all/update_status — same row-level visibility
+                      scoping as deployments.py (a ticket's deployment_id must be in the
+                      caller's assigned set, or they hold tickets.view_all).
+  maintenance.py        maintenance.view/view_all/create/update/delete — same scoping,
+                      except fleet-wide windows (deployment_id IS NULL) are never scoped.
+  users.py              staff.view/create/update/reset_password: staff account CRUD
+                      (deactivate, not hard delete — MaintenanceWindow.created_by FKs to
+                      users.id) + role assignment. Guards against self-lockout (can't
+                      deactivate/change your own role) and against dropping the last
+                      active staff.update holder.
+  notifications.py      notifications.view/resend/delete/test_send: notification history
+                      — see services/notifications/README.md. No row-level scoping (a
+                      notification log isn't tied to one deployment the same way).
+  rbac.py               rbac.view (read-only endpoints) / rbac.manage (role CRUD, set a
+                      role's permissions) — both admin-only at cutover. See "The
+                      permission model" above.
 ```
 
 ### Frontend — `frontend/src/`
@@ -248,18 +264,17 @@ useAuthStore().can('resource.action') — fed by /auth/me's `permissions`
 field — not by a hardcoded role name (see "The permission model" above).
 ```
 
-### The permission model (roles & permission catalog)
+### The permission model (roles, permission catalog, row-level visibility)
 
-Six Casbin permissions, all defined in `core/permissions.py`'s
-`ALL_PERMISSIONS`: `staff.manage`, `deployments.manage`, `tickets.manage`,
-`maintenance.manage`, `notifications.manage`, `rbac.manage`. Each router
-gates its whole route set with one of these via `require_permission()`, at
-the `APIRouter(dependencies=[...])` level — no per-route split.
-
-This used to be two hardcoded permissions with two hardcoded roles
-(`admin`/`engineer`, no catalog, no UI). `alembic/versions/010_rbac_catalog.py`
-was a **behavior-preserving cutover** to a dynamic system — nobody's
-effective access changed, it just became inspectable/editable:
+28 Casbin permissions, all defined in `core/permissions.py`'s
+`ALL_PERMISSIONS` — one per *action*, not one per router. E.g.
+`deployments.renew`, `deployments.suspend`, `deployments.check_health`,
+`deployments.assign_staff` are four separate permissions a role can hold
+independently, gated per-route (`Depends(require_permission(*PERM))` on
+each route function, not one blanket `APIRouter(dependencies=[...])`).
+Full resource list: `deployments` (10 actions incl. `view`/`view_all`),
+`tickets` (3), `maintenance` (5), `notifications` (4), `staff` (4), `rbac`
+(2 — `view`/`manage`).
 
 - **`Role`** (`app/models.py`) — dynamic, admin-creatable role *metadata*
   (name, description, `is_system`). `is_system=True` on the two seeded
@@ -267,8 +282,9 @@ effective access changed, it just became inspectable/editable:
   Roles & Permissions UI (`api/routers/rbac.py`, `frontend/src/pages/rbac/`)
   — their *permissions* can still be edited, just not their name.
 - **`Permission`** (`app/models.py`) — the fixed, migration-seeded catalog
-  the UI's checkbox grid renders against. New permissions are added by a
-  migration (mirroring `ALL_PERMISSIONS`), never invented at runtime.
+  the UI's checkbox grid renders against (grouped by resource —
+  `RolePermissionsPage.tsx`). New permissions are added by a migration
+  (mirroring `ALL_PERMISSIONS`), never invented at runtime.
 - **`casbin_rule`** stays the actual enforcement source of truth — `Role`/
   `Permission` are metadata layered on top, kept in sync by
   `services/rbac.py` (never edited directly). A user's role is still a
@@ -277,22 +293,50 @@ effective access changed, it just became inspectable/editable:
   multi-role-per-user when it added the catalog, unlike PoultryPro-CBF's
   equivalent system).
 
+**History**: two hardcoded permissions/roles → `010_rbac_catalog.py` split
+into one coarse permission per resource (behavior-preserving: nobody's
+access changed) → `011_granular_permissions.py` split each resource's one
+`.manage` into one permission per action, **and was NOT
+behavior-preserving for `engineer` by design** (see below).
+
+**Row-level visibility** (deployments / tickets / maintenance): a user
+assigned to specific deployments (`DeploymentStaffAssignment`, see
+`api/routers/deployments.py`'s `PUT .../staff`) only sees *those*
+deployments, plus their tickets and (deployment-specific) maintenance
+windows — fleet-wide maintenance windows (`deployment_id IS NULL`) are
+never scoped. Holding `<resource>.view_all` bypasses this. As of migration
+011, **only `admin` holds any `view_all` permission** — `engineer` keeps
+every *action* it had before, but only against deployments explicitly
+assigned to it; an engineer with nothing assigned sees an empty fleet.
+Enforced server-side (`_get_visible_or_404` in each of those three
+routers — a deployment_id the caller isn't scoped to 404s from *every*
+route that takes one, not just the list/detail GETs, via
+`services/deployment_scope.assigned_deployment_ids`), not just hidden in
+the frontend. `services/notifications/recipients.py`'s `fleet_staff()`
+(the fallback recipient set for an *unassigned* deployment's alerts) was
+updated to match: it's `deployments.view_all` holders only now, not "every
+role with any fleet-area permission" — notifying someone who'd 404 trying
+to open the link would be pointless.
+
 Since roles are custom now, anything that used to check `role == "admin"`
-by name had to become a permission check instead — most notably
-`services/notifications/recipients.py`'s `fleet_staff()` (notification
-fan-out) and the frontend's route/nav guards (`useAuthStore().can()`,
-fed by `/auth/me`'s new `permissions: string[]` field). Grepping for a
-literal `"admin"`/`"engineer"` string anywhere outside a migration or the
-two seed rows themselves is a sign something was missed.
+by name had to become a permission check instead — most notably the
+`fleet_staff()` fix above and the frontend's route/nav guards
+(`useAuthStore().can()`, fed by `/auth/me`'s `permissions: string[]`
+field, `App.tsx`'s `RequirePermission`). Grepping for a literal
+`"admin"`/`"engineer"` string anywhere outside a migration or the two seed
+rows themselves is a sign something was missed. `RequirePermission`
+renders an inline "no access" message rather than redirecting to another
+gated route (e.g. `/deployments`) — a role with no view permission
+anywhere would otherwise bounce between two failing redirects forever.
 
 `api/routers/users.py` and `api/routers/rbac.py` guard footguns directly
 (not via Casbin — Casbin has no concept of "don't let this go to zero"):
 an admin can't deactivate or change their own role (must ask another
-admin); no edit may drop the last active `staff.manage` holder
+admin); no edit may drop the last active `staff.update` holder
 (`rbac.count_users_with_permission`); no role edit/delete may orphan
 `rbac.manage` entirely (`rbac.would_orphan_permission`) — checked by
-resource+action now, not by hardcoding "the admin role", since a custom
-role could also hold either permission. Deactivating/resetting a user's
+resource+action, not by hardcoding "the admin role", since a custom role
+could also hold either permission. Deactivating/resetting a user's
 password bumps `token_version` (`core/deps.get_current_user` already
 checks it) — but a deactivated user is rejected immediately regardless,
 since `is_active` is re-checked live on every request, not just baked

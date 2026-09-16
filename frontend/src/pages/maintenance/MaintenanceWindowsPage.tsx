@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import { Plus } from 'lucide-react'
 import api from '../../lib/api'
 import { formatDate } from '../../lib/utils'
+import { useAuthStore } from '../../stores/auth'
 import { DataTable, type Column } from '../../components/ui/DataTable'
 import { Badge } from '../../components/ui/Badge'
 import { Modal } from '../../components/ui/Modal'
@@ -45,6 +46,7 @@ type NewWindowForm = {
 
 export default function MaintenanceWindowsPage() {
   const qc = useQueryClient()
+  const can = useAuthStore((s) => s.can)
   const { data, isLoading } = useQuery({
     queryKey: ['maintenance-windows'],
     queryFn: () => api.get<MaintenanceWindowListResponse>('/maintenance-windows').then((r) => r.data),
@@ -90,9 +92,9 @@ export default function MaintenanceWindowsPage() {
       return <Badge variant={b.variant}>{b.label}</Badge>
     } },
     { key: 'status', header: 'Status', render: (w) => <Badge variant={STATUS_VARIANT[w.status]}>{w.status.replace('_', ' ')}</Badge> },
-    {
+    ...(can('maintenance.update') ? [{
       key: 'actions', header: '', className: 'text-right',
-      render: (w) => (
+      render: (w: MaintenanceWindow) => (
         <div className="flex justify-end gap-1">
           {w.status === 'in_progress' && (
             <Button size="sm" variant="ghost" onClick={() => patchMutation.mutate({ id: w.id, body: { status: 'completed' } })}>Complete</Button>
@@ -102,14 +104,16 @@ export default function MaintenanceWindowsPage() {
           )}
         </div>
       ),
-    },
+    }] : []),
   ]
 
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold text-text">Maintenance Windows</h1>
-        <Button icon={<Plus size={15} />} onClick={() => setShowCreate(true)}>New Window</Button>
+        {can('maintenance.create') && (
+          <Button icon={<Plus size={15} />} onClick={() => setShowCreate(true)}>New Window</Button>
+        )}
       </div>
       <DataTable columns={columns} data={data?.items ?? []} loading={isLoading} keyExtractor={(w) => w.id} emptyMessage="No maintenance windows scheduled." />
 

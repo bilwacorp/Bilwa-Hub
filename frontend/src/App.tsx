@@ -24,19 +24,28 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 }
 
 // Gates a route by permission ("resource.action") rather than a hardcoded
-// role name — a custom role granted e.g. staff.manage should reach the
-// Staff page too, not just the literal 'admin' role.
+// role name — a custom role granted e.g. staff.view should reach the
+// Staff page too, not just the literal 'admin' role. Renders inline
+// (doesn't redirect to another gated route like /deployments) — a role
+// with no view permissions anywhere would otherwise bounce between two
+// failing redirects forever.
 function RequirePermission({ permission, children }: { permission: string; children: React.ReactNode }) {
   const can = useAuthStore((s) => s.can)
-  if (!can(permission)) return <Navigate to="/deployments" replace />
+  if (!can(permission)) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-6">
+        <p className="text-sm text-muted">You don't have access to this page.</p>
+      </div>
+    )
+  }
   return <>{children}</>
 }
 
 const NAV_ITEMS = [
-  { to: '/deployments', label: 'Deployments', icon: LayoutGrid },
-  { to: '/tickets', label: 'Support Tickets', icon: Ticket },
-  { to: '/maintenance-windows', label: 'Maintenance', icon: CalendarClock },
-  { to: '/notifications', label: 'Notifications', icon: Bell },
+  { to: '/deployments', label: 'Deployments', icon: LayoutGrid, permission: 'deployments.view' },
+  { to: '/tickets', label: 'Support Tickets', icon: Ticket, permission: 'tickets.view' },
+  { to: '/maintenance-windows', label: 'Maintenance', icon: CalendarClock, permission: 'maintenance.view' },
+  { to: '/notifications', label: 'Notifications', icon: Bell, permission: 'notifications.view' },
 ] as const
 
 // Flush left accent bar rather than a filled pill — reads calmer against a
@@ -76,13 +85,13 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       </div>
       <nav className="flex-1 overflow-y-auto px-2.5 py-3 space-y-0.5">
-        {NAV_ITEMS.map((item) => (
+        {NAV_ITEMS.filter((item) => can(item.permission)).map((item) => (
           <NavLink key={item.to} to={item.to} onClick={onNavigate} className={({ isActive }) => navItemClass(isActive)}>
             <item.icon size={16} className="shrink-0" />
             {item.label}
           </NavLink>
         ))}
-        {can('staff.manage') && (
+        {can('staff.view') && (
           <NavLink to="/users" onClick={onNavigate} className={({ isActive }) => navItemClass(isActive)}>
             <Users size={16} className="shrink-0" />
             Staff
@@ -166,12 +175,12 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
-      <Route path="/deployments" element={<RequireAuth><Shell><DeploymentsListPage /></Shell></RequireAuth>} />
-      <Route path="/deployments/:deploymentId" element={<RequireAuth><Shell><DeploymentDetailPage /></Shell></RequireAuth>} />
-      <Route path="/tickets" element={<RequireAuth><Shell><SupportTicketsPage /></Shell></RequireAuth>} />
-      <Route path="/maintenance-windows" element={<RequireAuth><Shell><MaintenanceWindowsPage /></Shell></RequireAuth>} />
-      <Route path="/notifications" element={<RequireAuth><Shell><NotificationsPage /></Shell></RequireAuth>} />
-      <Route path="/users" element={<RequireAuth><RequirePermission permission="staff.manage"><Shell><StaffUsersPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/deployments" element={<RequireAuth><RequirePermission permission="deployments.view"><Shell><DeploymentsListPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/deployments/:deploymentId" element={<RequireAuth><RequirePermission permission="deployments.view"><Shell><DeploymentDetailPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/tickets" element={<RequireAuth><RequirePermission permission="tickets.view"><Shell><SupportTicketsPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/maintenance-windows" element={<RequireAuth><RequirePermission permission="maintenance.view"><Shell><MaintenanceWindowsPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/notifications" element={<RequireAuth><RequirePermission permission="notifications.view"><Shell><NotificationsPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/users" element={<RequireAuth><RequirePermission permission="staff.view"><Shell><StaffUsersPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/roles" element={<RequireAuth><RequirePermission permission="rbac.manage"><Shell><RolesPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/roles/:roleId/permissions" element={<RequireAuth><RequirePermission permission="rbac.manage"><Shell><RolePermissionsPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="*" element={<Navigate to="/deployments" replace />} />

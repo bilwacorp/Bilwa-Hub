@@ -64,8 +64,18 @@ export default function RolePermissionsPage() {
 
   const loading = catalogLoading || grantedLoading || selected === null
 
+  // Grouped by resource, one Card per resource — a flat list of ~28
+  // permissions is unwieldy; catalog order (server-defined) is preserved
+  // within each group.
+  const groups: { resource: string; permissions: Permission[] }[] = []
+  for (const p of catalog ?? []) {
+    let group = groups.find((g) => g.resource === p.resource)
+    if (!group) { group = { resource: p.resource, permissions: [] }; groups.push(group) }
+    group.permissions.push(p)
+  }
+
   return (
-    <div className="p-6 max-w-2xl">
+    <div className="p-6 max-w-3xl">
       <Link to="/roles" className="inline-flex items-center gap-1.5 text-sm text-muted hover:text-text mb-4">
         <ArrowLeft size={14} /> Back to roles
       </Link>
@@ -76,33 +86,37 @@ export default function RolePermissionsPage() {
       </div>
       {role?.description && <p className="text-sm text-muted mb-4">{role.description}</p>}
 
-      <Card header="Permissions" className="mt-4">
-        {loading ? (
-          <p className="text-sm text-muted">Loading…</p>
-        ) : (
-          <div className="space-y-1">
-            {(catalog ?? []).map((p) => {
-              const key = `${p.resource}.${p.action}`
-              return (
-                <label key={key} className="flex items-start gap-3 py-2 border-b border-border last:border-0 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="mt-0.5"
-                    checked={selected?.has(key) ?? false}
-                    onChange={() => toggle(key)}
-                  />
-                  <div className="min-w-0">
-                    <div className="font-mono text-sm text-text">{key}</div>
-                    {p.description && <div className="text-xs text-muted mt-0.5">{p.description}</div>}
-                  </div>
-                </label>
-              )
-            })}
-          </div>
-        )}
-      </Card>
+      {loading ? (
+        <p className="text-sm text-muted mt-4">Loading…</p>
+      ) : (
+        <div className="space-y-4 mt-4">
+          {groups.map((group) => (
+            <Card key={group.resource} header={<span className="capitalize">{group.resource}</span>}>
+              <div className="space-y-1">
+                {group.permissions.map((p) => {
+                  const key = `${p.resource}.${p.action}`
+                  return (
+                    <label key={key} className="flex items-start gap-3 py-2 border-b border-border last:border-0 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={selected?.has(key) ?? false}
+                        onChange={() => toggle(key)}
+                      />
+                      <div className="min-w-0">
+                        <div className="font-mono text-sm text-text">{key}</div>
+                        {p.description && <div className="text-xs text-muted mt-0.5">{p.description}</div>}
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
 
-      <div className="flex justify-end gap-2 mt-4">
+      <div className="flex justify-end gap-2 mt-4 sticky bottom-6">
         <Button variant="secondary" disabled={!dirty} onClick={() => setSelected(new Set(granted))}>Reset</Button>
         <Button
           loading={saveMutation.isPending} disabled={!dirty}

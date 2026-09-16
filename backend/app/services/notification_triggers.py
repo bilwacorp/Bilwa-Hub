@@ -5,11 +5,12 @@ services/notifications/README.md's "Triggers" section for the full picture.
 
 All three fan out via recipients_for_deployment() — the deployment's
 explicitly assigned staff (api/routers/deployments.py's PUT .../staff) if
-any, otherwise every user holding a fleet-area permission (recipients.py's
-fleet_staff()). One email per recipient with an email on file, one
-WhatsApp message per recipient with a phone on file. A recipient with
-neither is simply skipped for both (same "never block the caller" posture
-as a missing address anywhere else in this package)."""
+any, otherwise every user holding deployments.view_all (recipients.py's
+fleet_staff() — only they can actually see an unassigned deployment at
+all). One email per recipient with an email on file, one WhatsApp message
+per recipient with a phone on file. A recipient with neither is simply
+skipped for both (same "never block the caller" posture as a missing
+address anywhere else in this package)."""
 import logging
 from datetime import date
 from typing import Optional

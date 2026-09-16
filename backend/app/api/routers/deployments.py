@@ -1,7 +1,11 @@
-"""Staff-facing deployment registry + inbound-action triggers. Every route
-requires DEPLOYMENTS_MANAGE (see core/permissions.py — granted to both
-'admin' and 'engineer' at cutover, and to any custom role an admin grants
-it to via the Roles & Permissions UI, api/routers/rbac.py)."""
+"""Staff-facing deployment registry + inbound-action triggers. One
+permission per action (see core/permissions.py) rather than one router-
+level gate — a role can hold e.g. deployments.renew without
+deployments.suspend. GET/list/detail and every route taking a
+deployment_id are additionally row-scoped: a caller without
+DEPLOYMENTS_VIEW_ALL only sees/touches deployments explicitly assigned to
+them (_get_visible_or_404) — see core/permissions.py's "Row-level
+visibility" section."""
 import hashlib
 import secrets
 from datetime import datetime
@@ -11,7 +15,11 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.permissions import DEPLOYMENTS_MANAGE, require_permission
+from app.core.permissions import (
+    DEPLOYMENTS_ASSIGN_STAFF, DEPLOYMENTS_CHANGE_PLAN, DEPLOYMENTS_CHECK_HEALTH, DEPLOYMENTS_CREATE,
+    DEPLOYMENTS_EXTEND_EXPIRY, DEPLOYMENTS_RENEW, DEPLOYMENTS_REVIEW_REQUEST, DEPLOYMENTS_SUSPEND,
+    DEPLOYMENTS_VIEW, DEPLOYMENTS_VIEW_ALL, has_permission, require_permission,
+)
 from app.db.session import get_db
 from app.models import (
     Deployment, DeploymentSnapshot, DeploymentStaffAssignment, DeploymentStatus, MaintenanceWindow, User,
@@ -22,9 +30,10 @@ from app.schemas import (
     ReissueTokenOut, RenewActionRequest, StaffOptionOut, SubscriptionRequestReviewAction, SuspendActionRequest,
 )
 from app.services import deployment_client
+from app.services.deployment_scope import assigned_deployment_ids
 from app.services.maintenance_query import currently_active_windows
 
-router = APIRouter(prefix="/deployments", tags=["deployments"], dependencies=[Depends(require_permission(*DEPLOYMENTS_MANAGE))])
+router = APIRouter(prefix="/deployments", tags=["deployments"])
 
 
 async def _latest_snapshot(db: AsyncSession, deployment_id) -> DeploymentSnapshot | None:
@@ -82,15 +91,26 @@ async def _to_out(
     return out
 
 
-async def _get_or_404(db: AsyncSession, deployment_id: str) -> Deployment:
+async def _get_visible_or_404(db: AsyncSession, deployment_id: str, current_user: User) -> Deployment:
+    """Like a plain get-or-404, except a deployment outside the caller's
+    scope (not assigned to them, and they lack DEPLOYMENTS_VIEW_ALL) 404s
+    exactly like a nonexistent one — enforced here so every route taking a
+    deployment_id gets it "for free" via this one call, not just the list/
+    detail GETs."""
     d = (await db.execute(select(Deployment).where(Deployment.id == deployment_id))).scalar_one_or_none()
     if not d:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Deployment not found")
+    if not await has_permission(str(current_user.id), *DEPLOYMENTS_VIEW_ALL):
+        if d.id not in await assigned_deployment_ids(db, current_user.id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Deployment not found")
     return d
 
 
 @router.post("", response_model=DeploymentCreateOut, status_code=201)
-async def create_deployment(body: DeploymentCreate, db: AsyncSession = Depends(get_db)):
+async def create_deployment(
+    body: DeploymentCreate, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_CREATE)),
+):
     """Pre-creates a pending Deployment row + single-use registration_token
     before the client's infra even exists — the token (plus this hub's URL)
     then gets set as HUB_REGISTRATION_TOKEN/HUB_URL in that deployment's own
@@ -108,12 +128,13 @@ async def create_deployment(body: DeploymentCreate, db: AsyncSession = Depends(g
 
 
 @router.get("/staff-options", response_model=list[StaffOptionOut])
-async def list_staff_options(db: AsyncSession = Depends(get_db)):
-    """Every active staff account, for the deployment-assignment picker —
-    deliberately separate from GET /users (STAFF_MANAGE/admin-only, and a
-    much fuller shape) since both 'admin' and 'engineer' need this to
-    assign staff to a deployment. Registered ahead of GET /{deployment_id}
-    so "staff-options" isn't swallowed as a deployment_id path param."""
+async def list_staff_options(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_ASSIGN_STAFF)),
+):
+    """Every active staff account, for the deployment-assignment picker.
+    Registered ahead of GET /{deployment_id} so "staff-options" isn't
+    swallowed as a deployment_id path param."""
     rows = (await db.execute(select(User).where(User.is_active.is_(True)).order_by(User.username))).scalars().all()
     return [StaffOptionOut.model_validate(u) for u in rows]
 
@@ -121,10 +142,19 @@ async def list_staff_options(db: AsyncSession = Depends(get_db)):
 @router.get("", response_model=DeploymentListResponse)
 async def list_deployments(
     page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_VIEW)),
 ):
-    total = (await db.execute(select(func.count(Deployment.id)))).scalar() or 0
+    conditions = []
+    if not await has_permission(str(current_user.id), *DEPLOYMENTS_VIEW_ALL):
+        scoped_ids = await assigned_deployment_ids(db, current_user.id)
+        if not scoped_ids:
+            return DeploymentListResponse(total=0, items=[])
+        conditions.append(Deployment.id.in_(scoped_ids))
+
+    total = (await db.execute(select(func.count(Deployment.id)).where(*conditions))).scalar() or 0
     rows = (await db.execute(
-        select(Deployment).order_by(Deployment.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+        select(Deployment).where(*conditions).order_by(Deployment.created_at.desc())
+        .offset((page - 1) * page_size).limit(page_size)
     )).scalars().all()
     active_windows = await currently_active_windows(db)
     assigned_staff_map = await _assigned_staff_map(db, [d.id for d in rows])
@@ -132,21 +162,27 @@ async def list_deployments(
 
 
 @router.get("/{deployment_id}", response_model=DeploymentOut)
-async def get_deployment(deployment_id: str, db: AsyncSession = Depends(get_db)):
-    d = await _get_or_404(db, deployment_id)
+async def get_deployment(
+    deployment_id: str, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_VIEW)),
+):
+    d = await _get_visible_or_404(db, deployment_id, current_user)
     assigned_staff_map = await _assigned_staff_map(db, [d.id])
     return await _to_out(db, d, await currently_active_windows(db), assigned_staff_map)
 
 
 @router.put("/{deployment_id}/staff", response_model=list[StaffOptionOut])
-async def assign_staff(deployment_id: str, body: DeploymentStaffAssignRequest, db: AsyncSession = Depends(get_db)):
+async def assign_staff(
+    deployment_id: str, body: DeploymentStaffAssignRequest, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_ASSIGN_STAFF)),
+):
     """Replaces this deployment's assigned-staff set wholesale — not an
     incremental add/remove. Assigning at least one person here narrows
     services/notifications/recipients.py's fan-out for this deployment's
     tickets/subscription-requests to just the assigned staff; clearing the
     set (empty user_ids) reverts to notifying every fleet-area permission
     holder — see recipients.py's fleet_staff()."""
-    d = await _get_or_404(db, deployment_id)
+    d = await _get_visible_or_404(db, deployment_id, current_user)
     wanted_ids = list(dict.fromkeys(body.user_ids))  # de-dupe, preserve order
     if wanted_ids:
         found = (await db.execute(select(User.id).where(User.id.in_(wanted_ids)))).scalars().all()
@@ -163,12 +199,16 @@ async def assign_staff(deployment_id: str, body: DeploymentStaffAssignRequest, d
 
 
 @router.post("/{deployment_id}/reissue-token", response_model=ReissueTokenOut)
-async def reissue_token(deployment_id: str, db: AsyncSession = Depends(get_db)):
+async def reissue_token(
+    deployment_id: str, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_CREATE)),
+):
     """Manual recovery path (Phase 1, see the plan's edge-case table) for a
     deployment whose locally stored AppSetting state was lost after a
     successful registration — issues a fresh single-use token and resets
-    this row back to pending."""
-    d = await _get_or_404(db, deployment_id)
+    this row back to pending. Gated by DEPLOYMENTS_CREATE, not a separate
+    permission — it's the same "onboard a deployment" capability."""
+    d = await _get_visible_or_404(db, deployment_id, current_user)
     token = secrets.token_urlsafe(32)
     d.registration_token_hash = hashlib.sha256(token.encode()).hexdigest()
     d.registration_token_consumed_at = None
@@ -180,8 +220,11 @@ async def reissue_token(deployment_id: str, db: AsyncSession = Depends(get_db)):
 # ── inbound actions (hub -> deployment) ─────────────────────────────────
 
 @router.post("/{deployment_id}/actions/renew")
-async def action_renew(deployment_id: str, body: RenewActionRequest, db: AsyncSession = Depends(get_db)):
-    d = await _get_or_404(db, deployment_id)
+async def action_renew(
+    deployment_id: str, body: RenewActionRequest, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_RENEW)),
+):
+    d = await _get_visible_or_404(db, deployment_id, current_user)
     try:
         return await deployment_client.renew(d, new_expiry_date=body.new_expiry_date.isoformat(), renewal_amount=body.renewal_amount)
     except deployment_client.DeploymentCallError as e:
@@ -189,8 +232,11 @@ async def action_renew(deployment_id: str, body: RenewActionRequest, db: AsyncSe
 
 
 @router.post("/{deployment_id}/actions/suspend")
-async def action_suspend(deployment_id: str, body: SuspendActionRequest, db: AsyncSession = Depends(get_db)):
-    d = await _get_or_404(db, deployment_id)
+async def action_suspend(
+    deployment_id: str, body: SuspendActionRequest, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_SUSPEND)),
+):
+    d = await _get_visible_or_404(db, deployment_id, current_user)
     try:
         return await deployment_client.suspend(d, reason=body.reason)
     except deployment_client.DeploymentCallError as e:
@@ -198,8 +244,11 @@ async def action_suspend(deployment_id: str, body: SuspendActionRequest, db: Asy
 
 
 @router.post("/{deployment_id}/actions/change-plan")
-async def action_change_plan(deployment_id: str, body: ChangePlanActionRequest, db: AsyncSession = Depends(get_db)):
-    d = await _get_or_404(db, deployment_id)
+async def action_change_plan(
+    deployment_id: str, body: ChangePlanActionRequest, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_CHANGE_PLAN)),
+):
+    d = await _get_visible_or_404(db, deployment_id, current_user)
     try:
         return await deployment_client.change_plan(d, new_plan_id=str(body.new_plan_id))
     except deployment_client.DeploymentCallError as e:
@@ -207,8 +256,11 @@ async def action_change_plan(deployment_id: str, body: ChangePlanActionRequest, 
 
 
 @router.post("/{deployment_id}/actions/extend-expiry")
-async def action_extend_expiry(deployment_id: str, body: ExtendExpiryActionRequest, db: AsyncSession = Depends(get_db)):
-    d = await _get_or_404(db, deployment_id)
+async def action_extend_expiry(
+    deployment_id: str, body: ExtendExpiryActionRequest, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_EXTEND_EXPIRY)),
+):
+    d = await _get_visible_or_404(db, deployment_id, current_user)
     try:
         return await deployment_client.extend_expiry(d, new_expiry_date=body.new_expiry_date.isoformat())
     except deployment_client.DeploymentCallError as e:
@@ -216,11 +268,14 @@ async def action_extend_expiry(deployment_id: str, body: ExtendExpiryActionReque
 
 
 @router.post("/{deployment_id}/actions/check-health")
-async def action_check_health(deployment_id: str, db: AsyncSession = Depends(get_db)):
+async def action_check_health(
+    deployment_id: str, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_CHECK_HEALTH)),
+):
     """Live on-demand probe — see deployment_client.check_health's docstring
     for how this differs from the passive, heartbeat-derived `Health` dot
     on the list/detail pages."""
-    d = await _get_or_404(db, deployment_id)
+    d = await _get_visible_or_404(db, deployment_id, current_user)
     try:
         return await deployment_client.check_health(d)
     except deployment_client.DeploymentCallError as e:
@@ -230,8 +285,9 @@ async def action_check_health(deployment_id: str, db: AsyncSession = Depends(get
 @router.patch("/{deployment_id}/subscription-requests/{request_id}")
 async def review_subscription_request(
     deployment_id: str, request_id: str, body: SubscriptionRequestReviewAction, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_REVIEW_REQUEST)),
 ):
-    d = await _get_or_404(db, deployment_id)
+    d = await _get_visible_or_404(db, deployment_id, current_user)
     try:
         return await deployment_client.review_request(
             d, request_id=request_id, status=body.status, review_note=body.review_note,

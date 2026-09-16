@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import api from '../../lib/api'
 import { formatDate } from '../../lib/utils'
+import { useAuthStore } from '../../stores/auth'
 import { DataTable, type Column } from '../../components/ui/DataTable'
 import { Badge } from '../../components/ui/Badge'
 import { Modal } from '../../components/ui/Modal'
@@ -20,6 +21,7 @@ const STATUS_VARIANT: Record<SupportTicketStatus, 'amber' | 'blue' | 'green' | '
 
 export default function SupportTicketsPage() {
   const qc = useQueryClient()
+  const can = useAuthStore((s) => s.can)
   // A support-ticket notification's "View ticket" link lands here with
   // ?deployment_id=... (see backend/app/services/notification_triggers.py)
   // — /tickets is the only place a ticket can be viewed, the deployment
@@ -51,10 +53,10 @@ export default function SupportTicketsPage() {
     },
     { key: 'priority', header: 'Priority', render: (t) => <span className="capitalize">{t.priority}</span> },
     { key: 'status', header: 'Status', render: (t) => <Badge variant={STATUS_VARIANT[t.status]}>{t.status.replace('_', ' ')}</Badge> },
-    {
+    ...(can('tickets.update_status') ? [{
       key: 'actions', header: '', className: 'text-right',
-      render: (t) => <Button size="sm" variant="secondary" onClick={() => { setTarget(t); setNextStatus(t.status) }}>Update</Button>,
-    },
+      render: (t: SupportTicket) => <Button size="sm" variant="secondary" onClick={() => { setTarget(t); setNextStatus(t.status) }}>Update</Button>,
+    }] : []),
   ]
 
   return (
