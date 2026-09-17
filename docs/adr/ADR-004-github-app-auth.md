@@ -90,6 +90,46 @@ still FK to it, and losing GitHub access shouldn't erase HUB's own
 history. Reinstalling (or re-granting access) reactivates the same row
 by `external_id` rather than creating a duplicate.
 
+**9. The GitHub App itself can be created via GitHub's Manifest flow
+("Set up GitHub App"), not just hand-registered — DB-first, env-var-
+fallback, and this hub's first DB-stored runtime config.** Decisions 1-8
+above still required an admin to manually register a GitHub App via
+GitHub's Developer Settings UI and paste four credentials into env vars.
+`POST /github/app/manifest` (`app/integrations/github/api.py`) builds the
+manifest JSON (webhook/setup/redirect URLs derived from the authenticated
+request's own Origin — this hub is single-origin, per CLAUDE.md — not a
+user-typed field or a new Settings var); the frontend POSTs it to
+`https://github.com/settings/apps/new` (or the org-scoped variant) via an
+auto-submitting hidden form, since GitHub's manifest flow needs a real
+top-level navigation to render its own confirmation page, not a fetch.
+GitHub redirects to `GET /github/app/manifest-callback` with a one-time
+`code`, exchanged (`app_auth.exchange_manifest_code`, no auth header —
+this one GitHub endpoint needs none) for the new App's id/slug/private
+key/webhook secret, persisted into a new `GitHubAppConfig` row
+(`app_auth.save_app_config`, upsert-in-place — a practical singleton).
+
+`app_auth._load_app_credentials(db)` is the one place that now resolves
+which source wins: the DB row if present, else the `GITHUB_APP_*` env
+vars (decisions 1-8, unchanged), else `None`. Every reader of
+`settings.GITHUB_APP_*` switched to this. This is a deliberate,
+**narrow** exception to "config is either Casbin-gated domain data or a
+Settings env var" (confirmed by exploration — no prior
+`AppSetting`/singleton-table precedent exists anywhere in this
+codebase) — not a new general pattern to reach for elsewhere. It exists
+here specifically because this one credential set can now be *generated
+by the running app itself*, which a `.env` file fundamentally can't do.
+
+The manifest-callback is the one route in this whole subsystem that
+**requires** `github.manage` authentication, unlike the install
+`/callback` (decision 3/4), which must stay public since a real
+installation can legitimately happen from GitHub's side with no live Hub
+session at all. The manifest flow has no such legitimate unauthenticated
+case — it can only ever be reached right after an admin submitted the
+manifest form from inside this Hub's own UI — so requiring auth closes
+off "an attacker's own App adopted as this hub's App" for free, and no
+extra signed `state` param is layered on top (GitHub's `code` is already
+single-use, so there's nothing left for one to add here).
+
 ## Consequences
 
 - PAT-mode integrations are entirely unaffected — `client.py`'s
@@ -113,3 +153,12 @@ by `external_id` rather than creating a duplicate.
   directly), while the webhook path only has GitHub's minimal repository
   shape and derives `owner`/`html_url` from `full_name`. A manual sync
   afterward corrects any derived field once the real API data is fetched.
+- An ops team that already configured `GITHUB_APP_*` env vars sees no
+  change — the DB row only exists once someone actually runs "Set up
+  GitHub App," and env vars keep working as the fallback either way.
+  Clearing the DB row (no UI for this yet, direct DB access only) reverts
+  to whatever's in the env vars.
+- Re-running "Set up GitHub App" replaces the stored config in place — the
+  *old* GitHub App itself is left behind on GitHub, still existing but no
+  longer referenced by this hub; deleting it there is a manual follow-up
+  step this flow doesn't automate.

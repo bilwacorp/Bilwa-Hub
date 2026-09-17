@@ -134,6 +134,7 @@ GITHUB_REPOSITORY_SYNCED = "github.repository_synced"
 GITHUB_REPOSITORY_SYNC_FAILED = "github.repository_sync_failed"
 GITHUB_APP_INSTALLED = "github.app_installed"
 GITHUB_APP_UNINSTALLED = "github.app_uninstalled"
+GITHUB_APP_CONFIGURED = "github.app_configured"
 
 # ── deployment lineage (HUB-Expansion.md Phase 4 — see app/models.py's
 # Customer/Application/DeploymentRelease and app/services/lineage.py) ─────

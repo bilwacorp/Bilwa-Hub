@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,9 +25,9 @@ from app.integrations.github.models import (
     GitHubPullRequest, GitHubRelease, GitHubRepository,
 )
 from app.integrations.github.schemas import (
-    GitHubIntegrationCreate, GitHubIntegrationOut, GitHubIntegrationUpdate, GitHubIssueOut, GitHubPullRequestOut,
-    GitHubReleaseOut, GitHubRepositoryAddRequest, GitHubRepositoryDeploymentMappingsUpdate, GitHubRepositoryOut,
-    GitHubTestConnectionResult,
+    GitHubAppManifestRequest, GitHubIntegrationCreate, GitHubIntegrationOut, GitHubIntegrationUpdate, GitHubIssueOut,
+    GitHubPullRequestOut, GitHubReleaseOut, GitHubRepositoryAddRequest, GitHubRepositoryDeploymentMappingsUpdate,
+    GitHubRepositoryOut, GitHubTestConnectionResult,
 )
 from app.integrations.github.tasks import sync_repository_task
 from app.models import OperationalEventStatus, User
@@ -98,8 +98,18 @@ async def list_integrations(db: AsyncSession = Depends(get_db), current_user: Us
     return [_integration_out(i) for i in rows]
 
 
+@router.get("/app/status")
+async def get_app_status(db: AsyncSession = Depends(get_db), current_user: User = Depends(require_permission(*GITHUB_VIEW))):
+    """Lets the frontend choose between "Set up GitHub App" (manifest
+    flow, decision #9) and "Connect with GitHub" (install flow) without
+    probing install-url and handling its 400 — see
+    docs/adr/ADR-004-github-app-auth.md."""
+    creds = await app_auth._load_app_credentials(db)
+    return {"configured": creds is not None}
+
+
 @router.get("/app/install-url")
-async def get_app_install_url(current_user: User = Depends(require_permission(*GITHUB_MANAGE))):
+async def get_app_install_url(db: AsyncSession = Depends(get_db), current_user: User = Depends(require_permission(*GITHUB_MANAGE))):
     """Returns the GitHub App installation URL to redirect the browser
     to — see docs/integrations/github.md's "GitHub App auth mode". `state`
     is signed (core/security.py's create_access_token — same HS256/
@@ -108,16 +118,91 @@ async def get_app_install_url(current_user: User = Depends(require_permission(*G
     whoever started this; the callback still works correctly if `state`
     is missing/expired/tampered, since the `installation` webhook (not
     this redirect) is the actual source of truth for provisioning."""
-    if not settings.GITHUB_APP_ID or not settings.GITHUB_APP_SLUG or not settings.GITHUB_APP_PRIVATE_KEY:
+    creds = await app_auth._load_app_credentials(db)
+    if creds is None or not creds.slug:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "GitHub App is not configured on this hub (GITHUB_APP_ID/GITHUB_APP_SLUG/GITHUB_APP_PRIVATE_KEY)",
+            "GitHub App is not configured on this hub — use \"Set up GitHub App\" or set GITHUB_APP_ID/GITHUB_APP_SLUG/GITHUB_APP_PRIVATE_KEY",
         )
     state = create_access_token(
         {"purpose": _INSTALL_STATE_PURPOSE, "user_id": str(current_user.id)},
         expires_delta=timedelta(minutes=_INSTALL_STATE_TTL_MINUTES),
     )
-    return {"url": f"https://github.com/apps/{settings.GITHUB_APP_SLUG}/installations/new?state={state}"}
+    return {"url": f"https://github.com/apps/{creds.slug}/installations/new?state={state}"}
+
+
+@router.post("/app/manifest")
+async def create_app_manifest(
+    body: GitHubAppManifestRequest, request: Request, current_user: User = Depends(require_permission(*GITHUB_MANAGE)),
+):
+    """Builds the GitHub App manifest for the "Set up GitHub App" flow
+    (decision #9) — the frontend POSTs this JSON to `target_url` via an
+    auto-submitting HTML form (GitHub's manifest flow needs a real
+    top-level navigation, not a fetch, since it renders its own
+    confirmation page first). The public base URL is read off this
+    authenticated request itself, not a user-typed field or a new
+    Settings var — correct because this hub is single-origin (the
+    frontend's nginx proxies /api to the backend, per CLAUDE.md), so the
+    Origin the admin's browser used to reach this API *is* the hub's
+    public URL. Scheme is read from X-Forwarded-Proto (nginx sets it —
+    frontend/nginx.conf) rather than request.url.scheme, since uvicorn
+    isn't started with --proxy-headers and would otherwise report the
+    internal http:// hop to nginx instead of the real https://."""
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    origin = f"{scheme}://{request.url.netloc}"
+    name = (body.name or "BilwaCorp Fleet Hub").strip()
+    manifest = {
+        "name": name,
+        "url": origin,
+        "hook_attributes": {"url": f"{origin}/api/v1/github/app/webhooks"},
+        "redirect_url": f"{origin}/api/v1/github/app/manifest-callback",
+        "setup_url": f"{origin}/api/v1/github/app/callback",
+        "setup_on_update": True,
+        "public": False,
+        # Matches exactly what this integration reads (client.py) and
+        # processes (webhooks.py's _HANDLERS) today — nothing speculative.
+        "default_permissions": {"contents": "read", "issues": "read", "pull_requests": "read", "metadata": "read"},
+        "default_events": ["issues", "pull_request", "push", "release", "workflow_run"],
+    }
+    target_url = (
+        f"https://github.com/organizations/{body.github_org}/settings/apps/new"
+        if body.github_org else "https://github.com/settings/apps/new"
+    )
+    return {"manifest": manifest, "target_url": target_url}
+
+
+@router.get("/app/manifest-callback")
+async def github_app_manifest_callback(
+    code: Optional[str] = Query(None), db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*GITHUB_MANAGE)),
+):
+    """GitHub redirects here after an admin confirms App creation on
+    github.com. Unlike the install /callback above (which must stay
+    public — a real installation can legitimately happen from GitHub's
+    side with no live Hub session), this one REQUIRES an authenticated
+    github.manage session: it can only ever be legitimately reached right
+    after that same admin submitted the manifest form from inside this
+    Hub's own UI, so there's no case where auth would block a real use —
+    and it closes off "an attacker's own code adopted as this hub's App"
+    the same way requiring auth on any state-changing admin action
+    always does. No extra `state` param on top of that — GitHub's `code`
+    is already single-use, so there's nothing left for a signed state to
+    add here (contrast the install /callback, which is public and does
+    need one)."""
+    if not code:
+        return RedirectResponse(f"{settings.FRONTEND_URL}/github?app_setup_error=1")
+    try:
+        data = await app_auth.exchange_manifest_code(code)
+        config = await app_auth.save_app_config(db, data, current_user.id)
+        record_event(
+            db, event_type=et.GITHUB_APP_CONFIGURED, source=et.SOURCE_GITHUB, actor_type=et.ACTOR_STAFF,
+            actor_id=current_user.id, entity_type=et.ENTITY_GITHUB_INTEGRATION, entity_id=config.id,
+            status=OperationalEventStatus.info, metadata={"github_app_id": config.github_app_id, "slug": config.slug},
+        )
+        await db.commit()
+    except GitHubApiError:
+        return RedirectResponse(f"{settings.FRONTEND_URL}/github?app_setup_error=1")
+    return RedirectResponse(f"{settings.FRONTEND_URL}/github?app_setup=1")
 
 
 @router.get("/app/callback")
@@ -142,7 +227,7 @@ async def github_app_callback(
             created_by = None
 
     try:
-        info = await app_auth.get_installation_info(installation_id)
+        info = await app_auth.get_installation_info(db, installation_id)
         account_login = info.get("account", {}).get("login", str(installation_id))
         integration = await app_auth.upsert_installation(db, installation_id, account_login, created_by)
         record_event(

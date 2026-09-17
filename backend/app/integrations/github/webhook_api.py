@@ -15,7 +15,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import event_types as et
-from app.core.config import settings
 from app.core.rate_limit import enforce_rate_limit
 from app.db.session import get_db
 from app.integrations.github import app_auth
@@ -125,13 +124,14 @@ async def github_webhook(integration_id: str, request: Request, db: AsyncSession
 async def github_app_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     """The GitHub App's single webhook URL (configured once, on the App
     itself, not per-installation — see docs/integrations/github.md's
-    "GitHub App auth mode"). Verified with the one shared
-    GITHUB_APP_WEBHOOK_SECRET, and the target GitHubIntegration is
-    resolved from `payload["installation"]["id"]` instead of a URL path
-    segment. Handles `installation`/`installation_repositories` directly
-    (these describe the integration row itself, not a repo/PR/issue
-    child row) and delegates everything else to the same delivery-insert
-    + Celery-dispatch path the per-integration endpoint above uses."""
+    "GitHub App auth mode"). Verified with the one shared webhook secret
+    (app_auth._load_app_credentials — DB config or env vars, whichever is
+    configured), and the target GitHubIntegration is resolved from
+    `payload["installation"]["id"]` instead of a URL path segment.
+    Handles `installation`/`installation_repositories` directly (these
+    describe the integration row itself, not a repo/PR/issue child row)
+    and delegates everything else to the same delivery-insert + Celery-
+    dispatch path the per-integration endpoint above uses."""
     await enforce_rate_limit("github-app-webhook", limit=120, window_seconds=60)
 
     raw_body = await request.body()
@@ -139,7 +139,8 @@ async def github_app_webhook(request: Request, db: AsyncSession = Depends(get_db
     delivery_id = request.headers.get("x-github-delivery")
     event_type = request.headers.get("x-github-event", "unknown")
 
-    secret = settings.GITHUB_APP_WEBHOOK_SECRET or None
+    creds = await app_auth._load_app_credentials(db)
+    secret = creds.webhook_secret if creds else None
     valid = bool(secret) and verify_signature(secret, raw_body, signature_header)
 
     try:

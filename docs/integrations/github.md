@@ -355,6 +355,18 @@ design/reasoning in `docs/adr/ADR-004-github-app-auth.md` — summary:
   `deactivate_repositories`). A removed repo is deactivated
   (`GitHubRepository.is_active=False`), never deleted, and reactivated in
   place if access is re-granted later.
+- **The GitHub App itself can be auto-created via GitHub's Manifest
+  flow** ("Set up GitHub App" in the UI, ADR-004 decision #9) — no
+  Developer Settings form-filling, no env vars to paste. `POST
+  /github/app/manifest` builds the manifest from the request's own
+  origin; the frontend submits it to github.com via a hidden auto-submit
+  form; `GET /github/app/manifest-callback` (the one route here that
+  *requires* `github.manage` auth, unlike the public install `/callback`)
+  exchanges the resulting one-time code and stores the App's credentials
+  in a new `GitHubAppConfig` DB row. `app_auth._load_app_credentials`
+  resolves DB row vs. env vars (DB-first) everywhere the App's
+  credentials are needed — manually configuring `GITHUB_APP_*` still
+  works exactly as before if you never run this flow.
 
 ## What Phase 3 deliberately does not do
 

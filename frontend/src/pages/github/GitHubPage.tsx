@@ -25,6 +25,25 @@ const STATUS_VARIANT: Record<GitHubIntegration['status'], 'green' | 'gray' | 're
 
 type NewIntegrationForm = { name: string; github_org: string; access_token: string; webhook_secret: string }
 type AddRepoForm = { full_name: string }
+type ManifestForm = { name: string; github_org: string }
+
+/** Submits GitHub's App Manifest flow — a real top-level navigation
+ * (GitHub renders its own confirmation page before creating the App),
+ * not a fetch, so this builds and submits a hidden form rather than
+ * following a link. See docs/adr/ADR-004-github-app-auth.md decision #9. */
+function submitAppManifest(targetUrl: string, manifest: object) {
+  const form = document.createElement('form')
+  form.method = 'POST'
+  form.action = targetUrl
+  form.style.display = 'none'
+  const input = document.createElement('input')
+  input.type = 'hidden'
+  input.name = 'manifest'
+  input.value = JSON.stringify(manifest)
+  form.appendChild(input)
+  document.body.appendChild(form)
+  form.submit()
+}
 
 function IntegrationsTab() {
   const qc = useQueryClient()
@@ -35,12 +54,24 @@ function IntegrationsTab() {
     queryFn: () => api.get<GitHubIntegration[]>('/github/integrations').then((r) => r.data),
     refetchInterval: 30_000,
   })
+  const { data: appStatus } = useQuery({
+    queryKey: ['github-app-status'],
+    queryFn: () => api.get<{ configured: boolean }>('/github/app/status').then((r) => r.data),
+  })
 
   useEffect(() => {
-    if (searchParams.get('installed') !== '1') return
-    toast.success('GitHub App connected')
-    qc.invalidateQueries({ queryKey: ['github-integrations'] })
-    setSearchParams((params) => { params.delete('installed'); return params }, { replace: true })
+    if (searchParams.get('installed') === '1') {
+      toast.success('GitHub App connected')
+      qc.invalidateQueries({ queryKey: ['github-integrations'] })
+      setSearchParams((params) => { params.delete('installed'); return params }, { replace: true })
+    } else if (searchParams.get('app_setup') === '1') {
+      toast.success('GitHub App created — you can now connect an org')
+      qc.invalidateQueries({ queryKey: ['github-app-status'] })
+      setSearchParams((params) => { params.delete('app_setup'); return params }, { replace: true })
+    } else if (searchParams.get('app_setup_error') === '1') {
+      toast.error('Setting up the GitHub App failed — please try again')
+      setSearchParams((params) => { params.delete('app_setup_error'); return params }, { replace: true })
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
@@ -48,6 +79,16 @@ function IntegrationsTab() {
     mutationFn: () => api.get<{ url: string }>('/github/app/install-url').then((r) => r.data.url),
     onSuccess: (url) => { window.location.href = url },
     onError: (e) => toast.error(errMsg(e, 'GitHub App is not configured on this hub')),
+  })
+
+  const [showSetupApp, setShowSetupApp] = useState(false)
+  const setupAppForm = useForm<ManifestForm>()
+  const setupAppMutation = useMutation({
+    mutationFn: (v: ManifestForm) => api.post<{ manifest: object; target_url: string }>('/github/app/manifest', {
+      name: v.name || undefined, github_org: v.github_org || undefined,
+    }).then((r) => r.data),
+    onSuccess: ({ manifest, target_url }) => submitAppManifest(target_url, manifest),
+    onError: (e) => toast.error(errMsg(e, 'Failed to start GitHub App setup')),
   })
 
   const [showCreate, setShowCreate] = useState(false)
@@ -124,14 +165,33 @@ function IntegrationsTab() {
         </p>
         {can('github.manage') && (
           <div className="flex gap-2">
-            <Button icon={<Github size={15} />} loading={connectMutation.isPending} onClick={() => connectMutation.mutate()}>
-              Connect with GitHub
-            </Button>
+            {appStatus?.configured ? (
+              <Button icon={<Github size={15} />} loading={connectMutation.isPending} onClick={() => connectMutation.mutate()}>
+                Connect with GitHub
+              </Button>
+            ) : (
+              <Button icon={<Github size={15} />} onClick={() => setShowSetupApp(true)}>Set up GitHub App</Button>
+            )}
             <Button variant="secondary" icon={<Plus size={15} />} onClick={() => setShowCreate(true)}>Use a token instead</Button>
           </div>
         )}
       </div>
       <DataTable columns={columns} data={integrations ?? []} loading={isLoading} keyExtractor={(i) => i.id} emptyMessage="No GitHub integrations configured yet." />
+
+      <Modal
+        open={showSetupApp} onClose={() => setShowSetupApp(false)} title="Set up GitHub App" size="sm"
+        footer={<><Button variant="secondary" onClick={() => setShowSetupApp(false)}>Cancel</Button><Button loading={setupAppMutation.isPending} onClick={setupAppForm.handleSubmit((v) => setupAppMutation.mutate(v))}>Continue on GitHub</Button></>}
+      >
+        <p className="text-xs text-muted mb-3">
+          Creates a new GitHub App via GitHub's manifest flow — no manual Developer Settings form-filling. You'll be
+          taken to GitHub to review and confirm, then back here automatically. Do this once per hub; every future org
+          uses "Connect with GitHub" against the same App.
+        </p>
+        <form className="space-y-4">
+          <Input label="App name (optional)" placeholder="BilwaCorp Fleet Hub" {...setupAppForm.register('name')} />
+          <Input label="GitHub org (optional)" placeholder="Leave blank to create under your personal account" {...setupAppForm.register('github_org')} />
+        </form>
+      </Modal>
 
       <Modal
         open={showCreate} onClose={() => setShowCreate(false)} title="New GitHub Integration" size="sm"

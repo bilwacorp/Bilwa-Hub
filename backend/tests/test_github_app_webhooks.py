@@ -9,7 +9,7 @@ itself."""
 import hashlib
 import hmac
 import json
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import select
 
@@ -21,6 +21,16 @@ from app.models import OperationalEvent
 from tests.conftest import as_user
 
 _SECRET = "app-whsec-test"
+
+
+def _configure_app_env(monkeypatch, *, webhook_secret: str = _SECRET) -> None:
+    """_load_app_credentials' env-fallback only kicks in once GITHUB_APP_ID
+    AND GITHUB_APP_PRIVATE_KEY are both set (docs/adr/ADR-004-github-app-
+    auth.md decision #9) — setting the webhook secret alone isn't
+    "configured" any more than it was before this DB-first refactor."""
+    monkeypatch.setattr(settings, "GITHUB_APP_ID", "12345")
+    monkeypatch.setattr(settings, "GITHUB_APP_PRIVATE_KEY", "not-a-real-key-but-non-empty")
+    monkeypatch.setattr(settings, "GITHUB_APP_WEBHOOK_SECRET", webhook_secret)
 
 
 def _sign(body: bytes) -> str:
@@ -53,7 +63,7 @@ ISSUE_PAYLOAD = {
 
 
 async def test_installation_created_provisions_integration(client, db_session, monkeypatch):
-    monkeypatch.setattr(settings, "GITHUB_APP_WEBHOOK_SECRET", _SECRET)
+    _configure_app_env(monkeypatch)
     body = json.dumps(INSTALLATION_PAYLOAD).encode()
     resp = await client.post("/github/app/webhooks", content=body, headers={**_headers("installation", "a-1"), "X-Hub-Signature-256": _sign(body)})
     assert resp.status_code == 202
@@ -70,7 +80,7 @@ async def test_installation_created_provisions_integration(client, db_session, m
 
 
 async def test_installation_deleted_disconnects_integration(client, db_session, monkeypatch):
-    monkeypatch.setattr(settings, "GITHUB_APP_WEBHOOK_SECRET", _SECRET)
+    _configure_app_env(monkeypatch)
     from app.integrations.github import app_auth
     integration = await app_auth.upsert_installation(db_session, 7003, "acme-org3", None)
     await db_session.commit()
@@ -85,7 +95,7 @@ async def test_installation_deleted_disconnects_integration(client, db_session, 
 
 
 async def test_wrong_shared_secret_is_rejected(client, monkeypatch):
-    monkeypatch.setattr(settings, "GITHUB_APP_WEBHOOK_SECRET", _SECRET)
+    _configure_app_env(monkeypatch)
     body = json.dumps(INSTALLATION_PAYLOAD).encode()
     resp = await client.post(
         "/github/app/webhooks", content=body,
@@ -95,7 +105,7 @@ async def test_wrong_shared_secret_is_rejected(client, monkeypatch):
 
 
 async def test_unconfigured_secret_rejects_every_delivery(client, monkeypatch):
-    monkeypatch.setattr(settings, "GITHUB_APP_WEBHOOK_SECRET", "")
+    _configure_app_env(monkeypatch, webhook_secret="")
     body = json.dumps(INSTALLATION_PAYLOAD).encode()
     resp = await client.post(
         "/github/app/webhooks", content=body,
@@ -109,7 +119,7 @@ async def test_domain_event_self_heals_missing_integration_and_enqueues_processi
     never seen (e.g. arrived before the `installation` webhook) still
     provisions the integration and gets processed — see
     docs/adr/ADR-004-github-app-auth.md decision 3."""
-    monkeypatch.setattr(settings, "GITHUB_APP_WEBHOOK_SECRET", _SECRET)
+    _configure_app_env(monkeypatch)
     body = json.dumps(ISSUE_PAYLOAD).encode()
     with patch("app.integrations.github.webhook_api.process_webhook_event_task.delay") as mock_delay:
         resp = await client.post("/github/app/webhooks", content=body, headers={**_headers("issues", "a-5"), "X-Hub-Signature-256": _sign(body)})
@@ -124,7 +134,7 @@ async def test_domain_event_self_heals_missing_integration_and_enqueues_processi
 
 
 async def test_duplicate_delivery_is_idempotent(client, monkeypatch):
-    monkeypatch.setattr(settings, "GITHUB_APP_WEBHOOK_SECRET", _SECRET)
+    _configure_app_env(monkeypatch)
     body = json.dumps(ISSUE_PAYLOAD).encode()
     headers = {**_headers("issues", "a-6"), "X-Hub-Signature-256": _sign(body)}
     first = await client.post("/github/app/webhooks", content=body, headers=headers)
@@ -155,6 +165,87 @@ async def test_install_url_returns_a_github_url_when_configured(client, admin_us
     resp = await client.get("/github/app/install-url")
     assert resp.status_code == 200
     assert resp.json()["url"].startswith("https://github.com/apps/bilwacorp-hub/installations/new?state=")
+
+
+async def test_status_reflects_configuration(client, admin_user, monkeypatch):
+    as_user(admin_user)
+    resp = await client.get("/github/app/status")
+    assert resp.json() == {"configured": False}
+
+    monkeypatch.setattr(settings, "GITHUB_APP_ID", "12345")
+    monkeypatch.setattr(settings, "GITHUB_APP_PRIVATE_KEY", "irrelevant-for-this-endpoint")
+    resp = await client.get("/github/app/status")
+    assert resp.json() == {"configured": True}
+
+
+async def test_manifest_requires_github_manage(client, engineer_user):
+    as_user(engineer_user)
+    resp = await client.post("/github/app/manifest", json={})
+    assert resp.status_code == 403
+
+
+async def test_manifest_is_well_formed_for_a_personal_account(client, admin_user):
+    as_user(admin_user)
+    resp = await client.post("/github/app/manifest", json={})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["target_url"] == "https://github.com/settings/apps/new"
+    manifest = body["manifest"]
+    assert manifest["hook_attributes"]["url"] == "http://test/api/v1/github/app/webhooks"
+    assert manifest["redirect_url"] == "http://test/api/v1/github/app/manifest-callback"
+    assert manifest["setup_url"] == "http://test/api/v1/github/app/callback"
+    assert manifest["name"] == "BilwaCorp Fleet Hub"
+    assert manifest["default_permissions"]["contents"] == "read"
+    assert "issues" in manifest["default_events"]
+
+
+async def test_manifest_target_url_is_org_scoped_when_github_org_given(client, admin_user):
+    as_user(admin_user)
+    resp = await client.post("/github/app/manifest", json={"name": "Custom Name", "github_org": "bilwacorp"})
+    body = resp.json()
+    assert body["target_url"] == "https://github.com/organizations/bilwacorp/settings/apps/new"
+    assert body["manifest"]["name"] == "Custom Name"
+
+
+async def test_manifest_callback_requires_authentication(client):
+    resp = await client.get("/github/app/manifest-callback", params={"code": "whatever"})
+    assert resp.status_code == 401
+
+
+async def test_manifest_callback_persists_config_on_successful_exchange(client, db_session, admin_user):
+    as_user(admin_user)
+    exchange_result = {
+        "id": 4242, "slug": "bilwacorp-hub", "name": "BilwaCorp Fleet Hub",
+        "html_url": "https://github.com/apps/bilwacorp-hub", "pem": "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----",
+        "webhook_secret": "generated-secret", "client_id": "Iv1.unused", "client_secret": "unused",
+    }
+    with patch("app.integrations.github.api.app_auth.exchange_manifest_code", new_callable=AsyncMock, return_value=exchange_result):
+        resp = await client.get("/github/app/manifest-callback", params={"code": "one-time-code"}, follow_redirects=False)
+    assert resp.status_code in (302, 307)
+    assert "app_setup=1" in resp.headers["location"]
+
+    from app.integrations.github.models import GitHubAppConfig
+    config = (await db_session.execute(select(GitHubAppConfig))).scalar_one()
+    assert config.github_app_id == "4242"
+    assert config.created_by == admin_user.id
+
+    events = (await db_session.execute(select(OperationalEvent).where(OperationalEvent.event_type == "github.app_configured"))).scalars().all()
+    assert len(events) == 1
+
+
+async def test_manifest_callback_redirects_with_error_on_failed_exchange(client, admin_user):
+    as_user(admin_user)
+    from app.integrations.github.client import GitHubApiError
+    with patch("app.integrations.github.api.app_auth.exchange_manifest_code", new_callable=AsyncMock, side_effect=GitHubApiError("bad code")):
+        resp = await client.get("/github/app/manifest-callback", params={"code": "bad-code"}, follow_redirects=False)
+    assert resp.status_code in (302, 307)
+    assert "app_setup_error=1" in resp.headers["location"]
+
+
+async def test_manifest_callback_without_code_redirects_with_error(client, admin_user):
+    as_user(admin_user)
+    resp = await client.get("/github/app/manifest-callback", follow_redirects=False)
+    assert "app_setup_error=1" in resp.headers["location"]
 
 
 async def test_installation_created_registers_initial_repositories(db_session):
@@ -249,7 +340,7 @@ async def test_full_uninstall_deactivates_every_repository_immediately(client, d
     `installation.deleted` carries no repository list at all — every repo
     that integration owned must be deactivated, done synchronously in
     webhook_api.py (not deferred to the async handler)."""
-    monkeypatch.setattr(settings, "GITHUB_APP_WEBHOOK_SECRET", _SECRET)
+    _configure_app_env(monkeypatch)
     integration = await app_auth.upsert_installation(db_session, 7104, "acme-repos4", None)
     repo = GitHubRepository(
         integration_id=integration.id, external_id=9401, full_name="acme-repos4/svc", name="svc",

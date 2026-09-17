@@ -218,3 +218,36 @@ class GitHubWebhookEvent(Base):
     correlation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, default=uuid.uuid4)
     received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class GitHubAppConfig(Base):
+    """The GitHub App's own credentials, produced by the manifest flow
+    (docs/adr/ADR-004-github-app-auth.md decision #9) — a practical
+    singleton: app code always queries "the one row"
+    (`select(GitHubAppConfig).limit(1)`, app_auth._load_app_credentials),
+    and the manifest-callback upserts this same row in place rather than
+    inserting a second one. This is the FIRST DB-stored runtime config in
+    this codebase (every other admin-facing knob is either Casbin-gated
+    domain data or a Settings env var) — a deliberate, narrow exception
+    for this one case, not a new general pattern. Takes precedence over
+    the env-var GITHUB_APP_* settings when present; env vars remain a
+    valid, fully-supported way to configure this instead (see
+    core/config.py) for anyone who already set it up that way or prefers
+    not to have a secret generated and stored by the running app itself.
+
+    GitHub's manifest-conversion response also returns client_id/
+    client_secret (for a "Sign in with GitHub" user-OAuth flow this hub
+    deliberately doesn't do, per ADR-004 decision 1) — those are not
+    persisted here since nothing would ever read them."""
+    __tablename__ = "github_app_configs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    github_app_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    slug: Mapped[str] = mapped_column(String(200), nullable=False)
+    html_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    private_key_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    webhook_secret_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

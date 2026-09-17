@@ -14,6 +14,15 @@ class GitHubIntegrationCreate(BaseModel):
     webhook_secret: str = Field(min_length=1)
 
 
+class GitHubAppManifestRequest(BaseModel):
+    """Both optional — "Set up GitHub App" (decision #9,
+    docs/adr/ADR-004-github-app-auth.md) needs no required input at all,
+    since the manifest's URLs are derived from the request itself
+    (api.py's create_app_manifest)."""
+    name: Optional[str] = Field(default=None, max_length=200)
+    github_org: Optional[str] = Field(default=None, max_length=200, pattern=r"^[A-Za-z0-9_.-]*$")
+
+
 class GitHubIntegrationUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     # Omitted (not just empty-string) means "leave the stored credential
