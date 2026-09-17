@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import event_types as et
+from app.core.rate_limit import enforce_rate_limit
 from app.db.session import get_db
 from app.integrations.github.models import GitHubIntegration, GitHubIntegrationStatus, GitHubWebhookEvent
 from app.integrations.github.security import verify_signature
@@ -28,6 +29,12 @@ router = APIRouter(prefix="/github", tags=["github-webhooks"])
 
 @router.post("/webhooks/{integration_id}")
 async def github_webhook(integration_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    # HUB-Expansion.md Phase 15 — a real GitHub org delivers at most a
+    # handful of webhooks per second even under heavy activity; this is
+    # only meant to blunt a flood/signature-brute-force attempt against
+    # this one public URL, not to model legitimate traffic precisely.
+    await enforce_rate_limit(f"github-webhook:{integration_id}", limit=120, window_seconds=60)
+
     # Raw bytes first — signature verification needs the exact bytes
     # GitHub signed, not a re-serialized JSON object (see security.py).
     raw_body = await request.body()

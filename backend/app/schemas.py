@@ -4,6 +4,7 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_serializer, field_validator
 
+from app.core.url_safety import validate_url_format
 from app.models import (
     DeploymentActionAttemptStatus, DeploymentActionExecutionStatus, DeploymentEnvironment, DeploymentReleaseSource,
     DeploymentStatus, MaintenanceWindowStatus, NotificationChannel, NotificationStatus, OperationalEventStatus,
@@ -138,6 +139,16 @@ class RegisterRequest(BaseModel):
     base_url: str
     app_version: Optional[str] = None
     action_key: str
+
+    @field_validator("base_url")
+    @classmethod
+    def _safe_base_url(cls, v: str) -> str:
+        # HUB-Expansion.md Phase 15 — the cheap, synchronous half of the
+        # SSRF check; see app/core/url_safety.py's module docstring for
+        # the full two-layer design (this schema validator only catches
+        # scheme/format/literal-IP cases — api/routers/register.py does
+        # the async DNS-resolution check this can't do here).
+        return validate_url_format(v)
 
 
 class RegisterResponse(BaseModel):
