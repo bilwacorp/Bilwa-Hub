@@ -2,16 +2,23 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import event_types as et
-from app.core.permissions import TICKETS_UPDATE_STATUS, TICKETS_VIEW, TICKETS_VIEW_ALL, has_permission, require_permission
+from app.core.permissions import (
+    TICKETS_MANAGE_LINKS, TICKETS_UPDATE_STATUS, TICKETS_VIEW, TICKETS_VIEW_ALL, has_permission, require_permission,
+)
 from app.db.session import get_db
-from app.models import Deployment, SupportTicket, SupportTicketStatus, User
-from app.schemas import SupportTicketListResponse, SupportTicketOut, SupportTicketUpdate
+from app.models import Deployment, SupportTicket, SupportTicketLink, SupportTicketStatus, User
+from app.schemas import (
+    OperationalEventOut, SupportTicketListResponse, SupportTicketLinkCreate, SupportTicketLinkOut, SupportTicketOut,
+    SupportTicketUpdate,
+)
 from app.services import deployment_client
 from app.services.deployment_scope import assigned_deployment_ids
 from app.services.events import record_event
+from app.services.ticket_links import resolve_link_display, target_exists, ticket_timeline
 
 logger = logging.getLogger(__name__)
 
@@ -99,3 +106,84 @@ async def update_ticket(
             logger.warning("tickets.update_ticket: push to deployment %s failed", deployment.id, exc_info=True)
 
     return SupportTicketOut.model_validate(t)
+
+
+# ── ticket links + timeline (HUB-Expansion.md Phase 6 — see
+# app/services/ticket_links.py) ─────────────────────────────────────────────
+
+async def _link_out(db: AsyncSession, link: SupportTicketLink) -> SupportTicketLinkOut:
+    label, url, target_status = await resolve_link_display(db, link)
+    return SupportTicketLinkOut(
+        id=link.id, ticket_id=link.ticket_id, link_type=link.link_type, target_id=link.target_id,
+        created_by=link.created_by, created_at=link.created_at, label=label, url=url, target_status=target_status,
+    )
+
+
+@router.get("/{ticket_id}/links", response_model=list[SupportTicketLinkOut])
+async def list_ticket_links(
+    ticket_id: str, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*TICKETS_VIEW)),
+):
+    t = await _get_visible_or_404(db, ticket_id, current_user)
+    rows = (await db.execute(
+        select(SupportTicketLink).where(SupportTicketLink.ticket_id == t.id).order_by(SupportTicketLink.created_at)
+    )).scalars().all()
+    return [await _link_out(db, link) for link in rows]
+
+
+@router.post("/{ticket_id}/links", response_model=SupportTicketLinkOut, status_code=201)
+async def create_ticket_link(
+    ticket_id: str, body: SupportTicketLinkCreate, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*TICKETS_MANAGE_LINKS)),
+):
+    t = await _get_visible_or_404(db, ticket_id, current_user)
+    if not await target_exists(db, body.link_type, body.target_id):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown {body.link_type.value} id")
+
+    link = SupportTicketLink(
+        ticket_id=t.id, link_type=body.link_type, target_id=body.target_id, created_by=current_user.id,
+    )
+    db.add(link)
+    try:
+        await db.flush()
+    except IntegrityError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This link already exists on this ticket")
+    await db.refresh(link)
+
+    record_event(
+        db, event_type=et.TICKET_LINK_ADDED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF, actor_id=current_user.id,
+        entity_type=et.ENTITY_TICKET, entity_id=t.id, deployment_id=t.deployment_id,
+        metadata={"link_type": body.link_type.value, "target_id": str(body.target_id)},
+    )
+    return await _link_out(db, link)
+
+
+@router.delete("/{ticket_id}/links/{link_id}", status_code=204)
+async def delete_ticket_link(
+    ticket_id: str, link_id: str, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*TICKETS_MANAGE_LINKS)),
+):
+    t = await _get_visible_or_404(db, ticket_id, current_user)
+    link = (await db.execute(
+        select(SupportTicketLink).where(SupportTicketLink.id == link_id, SupportTicketLink.ticket_id == t.id)
+    )).scalar_one_or_none()
+    if link is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Link not found")
+
+    record_event(
+        db, event_type=et.TICKET_LINK_REMOVED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF, actor_id=current_user.id,
+        entity_type=et.ENTITY_TICKET, entity_id=t.id, deployment_id=t.deployment_id,
+        metadata={"link_type": link.link_type.value, "target_id": str(link.target_id)},
+    )
+    await db.delete(link)
+    await db.flush()
+
+
+@router.get("/{ticket_id}/timeline", response_model=list[OperationalEventOut])
+async def get_ticket_timeline(
+    ticket_id: str, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*TICKETS_VIEW)),
+):
+    t = await _get_visible_or_404(db, ticket_id, current_user)
+    events = await ticket_timeline(db, t)
+    return [OperationalEventOut.model_validate(e) for e in events]

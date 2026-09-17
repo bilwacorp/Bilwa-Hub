@@ -80,6 +80,9 @@ DEPLOYMENT_SUBSCRIPTION_REQUEST_REVIEW_FAILED = "deployment.subscription_request
 TICKET_CREATED = "ticket.created"
 TICKET_UPDATED = "ticket.updated"
 TICKET_RESOLVED = "ticket.resolved"
+# HUB-Expansion.md Phase 6 — see app/services/ticket_links.py.
+TICKET_LINK_ADDED = "ticket.link_added"
+TICKET_LINK_REMOVED = "ticket.link_removed"
 
 # ── maintenance windows ───────────────────────────────────────────────────
 MAINTENANCE_CREATED = "maintenance.created"

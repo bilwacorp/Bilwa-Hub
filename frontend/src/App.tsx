@@ -11,6 +11,7 @@ import ResetPasswordPage from './pages/auth/ResetPasswordPage'
 import DeploymentsListPage from './pages/deployments/DeploymentsListPage'
 import DeploymentDetailPage from './pages/deployments/DeploymentDetailPage'
 import SupportTicketsPage from './pages/tickets/SupportTicketsPage'
+import SupportTicketDetailPage from './pages/tickets/SupportTicketDetailPage'
 import MaintenanceWindowsPage from './pages/maintenance/MaintenanceWindowsPage'
 import StaffUsersPage from './pages/users/StaffUsersPage'
 import NotificationsPage from './pages/notifications/NotificationsPage'
@@ -195,6 +196,7 @@ export default function App() {
       <Route path="/customers" element={<RequireAuth><RequirePermission permission="customers.view"><Shell><CustomersPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/applications" element={<RequireAuth><RequirePermission permission="applications.view"><Shell><ApplicationsPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/tickets" element={<RequireAuth><RequirePermission permission="tickets.view"><Shell><SupportTicketsPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/tickets/:ticketId" element={<RequireAuth><RequirePermission permission="tickets.view"><Shell><SupportTicketDetailPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/maintenance-windows" element={<RequireAuth><RequirePermission permission="maintenance.view"><Shell><MaintenanceWindowsPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/notifications" element={<RequireAuth><RequirePermission permission="notifications.view"><Shell><NotificationsPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/users" element={<RequireAuth><RequirePermission permission="staff.view"><Shell><StaffUsersPage /></Shell></RequirePermission></RequireAuth>} />

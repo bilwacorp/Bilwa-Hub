@@ -366,6 +366,40 @@ class SupportTicket(Base):
     deployment: Mapped["Deployment"] = relationship("Deployment")
 
 
+class TicketLinkType(str, enum.Enum):
+    """HUB-Expansion.md Phase 6 — a HUB-owned closed set of what a
+    SupportTicket can link to. Deliberately no 'incident' member — no
+    Incident concept exists anywhere in this codebase (see
+    docs/adr/ADR-006-support-engineering-link.md decision 1); a
+    deployment link isn't here either, since SupportTicket.deployment_id
+    already covers that (Phase 1), and duplicating it as a link_type
+    would just be two ways to express the same fact."""
+    github_issue = "github_issue"
+    github_pull_request = "github_pull_request"
+    github_release = "github_release"
+    maintenance_window = "maintenance_window"
+
+
+class SupportTicketLink(Base):
+    """Links a SupportTicket to a GitHub issue/PR/release or a
+    MaintenanceWindow. target_id is a plain UUID with no FK constraint —
+    same polymorphic-reference shape as OperationalEvent.entity_id, since
+    which table it points into depends on link_type. services/
+    ticket_links.py resolves the join and validates target existence at
+    creation time; there's no ORM relationship() to any of those tables
+    for the same "core app/models.py never imports the GitHub integration
+    package" reason as DeploymentRelease (see ADR-004 decision 4)."""
+    __tablename__ = "support_ticket_links"
+    __table_args__ = (UniqueConstraint("ticket_id", "link_type", "target_id", name="uq_ticket_link_target"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ticket_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("support_tickets.id", ondelete="CASCADE"), nullable=False)
+    link_type: Mapped[TicketLinkType] = mapped_column(Enum(TicketLinkType), nullable=False)
+    target_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class MaintenanceWindowStatus(str, enum.Enum):
     planned = "planned"
     in_progress = "in_progress"

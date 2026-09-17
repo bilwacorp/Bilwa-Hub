@@ -52,10 +52,16 @@ complete rather than frozen like the Phase 0 snapshot.
       │          enum, defaults 'production')
       ▼
   MAINTENANCE (Phase 7 not started — still create/update/delete only,
-               no draft/scheduled/approval-required lifecycle)
+               no draft/scheduled/approval-required lifecycle. Phase 6:
+               CAN be a SupportTicketLink target — see SUPPORT below)
       │
       ▼
-   SUPPORT (tickets exist; not yet linked to a GitHub issue — Phase 6)
+   SUPPORT (Phase 6: SupportTicketLink — a ticket can link to a GitHub
+            issue/PR/release or a maintenance window;
+            GET /tickets/{id}/timeline aggregates OperationalEvent rows
+            across the ticket + its deployment + everything it's linked
+            to, by entity reference — not a shared correlation_id, see
+            ADR-006 decision 4)
       │
       ▼
    APPROVAL (Phase 12/13: gates renew/suspend/change_plan, with a real
@@ -65,18 +71,21 @@ complete rather than frozen like the Phase 0 snapshot.
       ▼
     AUDIT (Phase 1: OperationalEvent — GitHub events flow into this same
            table via Phase 3, not a second event system; Phase 4's
-           customer/application/lineage changes flow into it too)
+           customer/application/lineage changes flow into it too; Phase
+           6's ticket timeline reads from it rather than adding a
+           second aggregation store)
 ```
 
 Every `OperationalEvent`-driven action (deployment lifecycle, tickets,
 maintenance, approvals, GitHub, lineage) is traceable WHO → WHAT → WHEN →
-WHICH DEPLOYMENT → WHICH EXTERNAL SYSTEM → RESULT today, for the domains
-that exist. The one gap left in that chain is the one Phase 4 didn't
-close: ticket ↔ GitHub issue (Phase 6) — WHY (the business reason an
-action was taken) still lives only in a ticket's own free-text
-description or a PR's title, not as a structured link. Release ↔ deployed
-version (previously the other gap) closed with Phase 4's
-`DeploymentRelease` table — see ADR-004.
+WHICH DEPLOYMENT → WHICH EXTERNAL SYSTEM → RESULT today, for every domain
+that exists. Ticket ↔ GitHub issue (the one gap left after Phase 4) closed
+with Phase 6's `SupportTicketLink` + timeline aggregation — see ADR-006.
+Phase 2's formal cross-system correlation is effectively subsumed by that
+same mechanism for the ticket case (ADR-006 decision 4 explains why a
+shared/propagated `correlation_id` doesn't actually work for retroactive
+many-to-one linking, and why entity-reference aggregation is used
+instead).
 
 ## Integration layer (Phase 3's shape, reused by future integrations)
 
@@ -142,14 +151,11 @@ package shape above.
 
 ## Still not started (unchanged from the Phase 0 audit unless noted)
 
-- Phase 2 (formal cross-system correlation) — partially exercised: Phase
-  1/12/13's `correlation_id` threading and Phase 3's per-webhook-delivery
-  `correlation_id` both work today for their own chains, but nothing yet
-  stitches a *support ticket's* correlation_id to a *GitHub issue's* —
-  that needs Phase 6's ticket ↔ issue link to exist first.
-- Phase 6 (support ↔ engineering link), Phase 7 (maintenance lifecycle),
+- Phase 7 (maintenance lifecycle — still create/update/delete only),
   Phase 8 (generic operational approvals beyond deployment actions),
-  Phase 9 (unified timeline UI), Phase 10 (dashboard), Phase 11
+  Phase 9 (unified timeline UI — Phase 6's per-ticket timeline is the
+  first curated aggregation over `OperationalEvent`, but nothing
+  fleet-wide/per-deployment yet), Phase 10 (dashboard), Phase 11
   (Integration Center UI — Phase 3 already keeps the health fields
   Phase 11 will read).
 - Phase 14/15/19 (RBAC/security/audit) — largely satisfied incrementally

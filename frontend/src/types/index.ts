@@ -129,6 +129,21 @@ export interface SupportTicketListResponse {
   items: SupportTicket[]
 }
 
+// HUB-Expansion.md Phase 6 — ticket <-> engineering links.
+export type TicketLinkType = 'github_issue' | 'github_pull_request' | 'github_release' | 'maintenance_window'
+
+export interface SupportTicketLink {
+  id: string
+  ticket_id: string
+  link_type: TicketLinkType
+  target_id: string
+  created_by: string | null
+  created_at: string
+  label: string
+  url: string | null
+  target_status: string | null
+}
+
 // How hard an active window bites — escalating:
 //   banner    → in-app notice only
 //   read_only → deployment 503s all writes

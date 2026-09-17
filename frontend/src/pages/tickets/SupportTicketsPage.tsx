@@ -1,14 +1,9 @@
-import { useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import toast from 'react-hot-toast'
+import { useSearchParams, useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import api from '../../lib/api'
 import { formatDate } from '../../lib/utils'
-import { useAuthStore } from '../../stores/auth'
 import { DataTable, type Column } from '../../components/ui/DataTable'
 import { Badge } from '../../components/ui/Badge'
-import { Modal } from '../../components/ui/Modal'
-import { Select } from '../../components/ui/Select'
 import { Button } from '../../components/ui/Button'
 import type { SupportTicket, SupportTicketListResponse, SupportTicketStatus } from '../../types'
 
@@ -20,12 +15,11 @@ const STATUS_VARIANT: Record<SupportTicketStatus, 'amber' | 'blue' | 'green' | '
 }
 
 export default function SupportTicketsPage() {
-  const qc = useQueryClient()
-  const can = useAuthStore((s) => s.can)
+  const navigate = useNavigate()
   // A support-ticket notification's "View ticket" link lands here with
   // ?deployment_id=... (see backend/app/services/notification_triggers.py)
-  // — /tickets is the only place a ticket can be viewed, the deployment
-  // detail page doesn't show tickets.
+  // — /tickets is the list; a row opens SupportTicketDetailPage.tsx
+  // (HUB-Expansion.md Phase 6 — links + timeline live there).
   const [searchParams, setSearchParams] = useSearchParams()
   const deploymentId = searchParams.get('deployment_id')
 
@@ -33,15 +27,6 @@ export default function SupportTicketsPage() {
     queryKey: ['tickets', deploymentId],
     queryFn: () => api.get<SupportTicketListResponse>('/tickets', { params: { deployment_id: deploymentId || undefined } }).then((r) => r.data),
     refetchInterval: 60_000,
-  })
-
-  const [target, setTarget] = useState<SupportTicket | null>(null)
-  const [nextStatus, setNextStatus] = useState<SupportTicketStatus>('in_progress')
-
-  const updateMutation = useMutation({
-    mutationFn: () => api.patch(`/tickets/${target!.id}`, { status: nextStatus }),
-    onSuccess: () => { toast.success('Ticket updated'); setTarget(null); qc.invalidateQueries({ queryKey: ['tickets'] }) },
-    onError: () => toast.error('Failed to update ticket'),
   })
 
   const columns: Column<SupportTicket>[] = [
@@ -53,10 +38,6 @@ export default function SupportTicketsPage() {
     },
     { key: 'priority', header: 'Priority', render: (t) => <span className="capitalize">{t.priority}</span> },
     { key: 'status', header: 'Status', render: (t) => <Badge variant={STATUS_VARIANT[t.status]}>{t.status.replace('_', ' ')}</Badge> },
-    ...(can('tickets.update_status') ? [{
-      key: 'actions', header: '', className: 'text-right',
-      render: (t: SupportTicket) => <Button size="sm" variant="secondary" onClick={() => { setTarget(t); setNextStatus(t.status) }}>Update</Button>,
-    }] : []),
   ]
 
   return (
@@ -69,29 +50,10 @@ export default function SupportTicketsPage() {
           </Button>
         )}
       </div>
-      <DataTable columns={columns} data={data?.items ?? []} loading={isLoading} keyExtractor={(t) => t.id} emptyMessage="No support tickets yet." />
-
-      <Modal
-        open={!!target} onClose={() => setTarget(null)} title={`Ticket — ${target?.subject ?? ''}`} size="sm"
-        footer={<><Button variant="secondary" onClick={() => setTarget(null)}>Cancel</Button><Button loading={updateMutation.isPending} onClick={() => updateMutation.mutate()}>Save</Button></>}
-      >
-        {target && (
-          <div className="space-y-4">
-            <p className="text-sm text-muted whitespace-pre-wrap">{target.description}</p>
-            <Select
-              label="Status"
-              options={[
-                { value: 'open', label: 'Open' },
-                { value: 'in_progress', label: 'In Progress' },
-                { value: 'resolved', label: 'Resolved' },
-                { value: 'closed', label: 'Closed' },
-              ]}
-              value={nextStatus}
-              onChange={(e) => setNextStatus(e.target.value as SupportTicketStatus)}
-            />
-          </div>
-        )}
-      </Modal>
+      <DataTable
+        columns={columns} data={data?.items ?? []} loading={isLoading} keyExtractor={(t) => t.id}
+        emptyMessage="No support tickets yet." onRowClick={(t) => navigate(`/tickets/${t.id}`)}
+      />
     </div>
   )
 }

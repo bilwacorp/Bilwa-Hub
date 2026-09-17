@@ -67,6 +67,7 @@ DEPLOYMENTS_MANAGE_LINEAGE = ("deployments", "manage_lineage")
 TICKETS_VIEW = ("tickets", "view")
 TICKETS_VIEW_ALL = ("tickets", "view_all")
 TICKETS_UPDATE_STATUS = ("tickets", "update_status")
+TICKETS_MANAGE_LINKS = ("tickets", "manage_links")
 
 # ── maintenance ───────────────────────────────────────────────────────────
 MAINTENANCE_VIEW = ("maintenance", "view")
@@ -168,6 +169,7 @@ ALL_PERMISSIONS: list[tuple[str, str, str]] = [
     (*TICKETS_VIEW, "View support tickets from deployments assigned to you"),
     (*TICKETS_VIEW_ALL, "View support tickets from every deployment"),
     (*TICKETS_UPDATE_STATUS, "Update a support ticket's status"),
+    (*TICKETS_MANAGE_LINKS, "Link a support ticket to a GitHub issue/PR/release or a maintenance window"),
     (*MAINTENANCE_VIEW, "View maintenance windows for deployments assigned to you (fleet-wide windows are always visible)"),
     (*MAINTENANCE_VIEW_ALL, "View maintenance windows for every deployment"),
     (*MAINTENANCE_CREATE, "Create a maintenance window"),

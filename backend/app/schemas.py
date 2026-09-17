@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, field_serializer, field_validator
 from app.models import (
     DeploymentActionAttemptStatus, DeploymentActionExecutionStatus, DeploymentEnvironment, DeploymentReleaseSource,
     DeploymentStatus, MaintenanceWindowStatus, NotificationChannel, NotificationStatus, OperationalEventStatus,
-    SupportTicketStatus,
+    SupportTicketStatus, TicketLinkType,
 )
 
 # How hard an active maintenance window bites (MaintenanceWindow.mode):
@@ -448,6 +448,30 @@ class SupportTicketListResponse(BaseModel):
 
 class SupportTicketUpdate(BaseModel):
     status: SupportTicketStatus
+
+
+# ── ticket links (HUB-Expansion.md Phase 6) ───────────────────────────────
+
+class SupportTicketLinkCreate(BaseModel):
+    link_type: TicketLinkType
+    target_id: uuid.UUID
+
+
+class SupportTicketLinkOut(BaseModel):
+    id: uuid.UUID
+    ticket_id: uuid.UUID
+    link_type: TicketLinkType
+    target_id: uuid.UUID
+    created_by: Optional[uuid.UUID]
+    created_at: datetime
+    # Resolved server-side by services/ticket_links.resolve_link_display —
+    # never populated by model_validate(link) alone, same denormalization
+    # shape as DeploymentReleaseOut.repository_full_name (Phase 4).
+    label: str = ""
+    url: Optional[str] = None
+    target_status: Optional[str] = None
+
+    model_config = {"from_attributes": True}
 
 
 # ── maintenance windows ─────────────────────────────────────────────────
