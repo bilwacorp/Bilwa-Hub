@@ -12,9 +12,10 @@ import { Input } from '../../components/ui/Input'
 import { Select } from '../../components/ui/Select'
 import { Modal } from '../../components/ui/Modal'
 import { Badge } from '../../components/ui/Badge'
+import { EventTimeline } from '../../components/ui/EventTimeline'
 import type {
   Application, Customer, Deployment, DeploymentActionExecution, DeploymentEnvironment, DeploymentGitHubInfo,
-  StaffOption,
+  OperationalEvent, StaffOption,
 } from '../../types'
 
 // Money actions (renew/suspend/change-plan) run immediately, unless a
@@ -185,6 +186,13 @@ export default function DeploymentDetailPage() {
   const { data: githubInfo } = useQuery({
     queryKey: ['deployment-github', deploymentId],
     queryFn: () => api.get<DeploymentGitHubInfo>(`/deployments/${deploymentId}/github`).then((r) => r.data),
+  })
+
+  // HUB-Expansion.md Phase 9 — unified timeline: every OperationalEvent
+  // already tagged with this deployment_id, newest first.
+  const { data: timeline } = useQuery({
+    queryKey: ['deployment-timeline', deploymentId],
+    queryFn: () => api.get<OperationalEvent[]>(`/deployments/${deploymentId}/timeline`).then((r) => r.data),
   })
 
   // HUB-Expansion.md Phase 4 — lineage (Customer/Application/Environment/
@@ -506,6 +514,11 @@ export default function DeploymentDetailPage() {
         <p className="text-xs text-muted mt-3">
           This list reflects the last heartbeat (up to 2h old) — the review action itself is sent live to the deployment.
         </p>
+      </div>
+
+      <div className="bg-surface border border-border rounded-lg p-4">
+        <h3 className="text-sm font-semibold text-text mb-3">Timeline</h3>
+        <EventTimeline events={timeline ?? []} />
       </div>
 
       <Modal open={showRenew} onClose={() => setShowRenew(false)} title="Renew Subscription" size="sm"

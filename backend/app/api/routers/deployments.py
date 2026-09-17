@@ -25,14 +25,14 @@ from app.db.session import get_db
 from app.models import (
     Application, Customer, Deployment, DeploymentActionAttempt, DeploymentActionExecution, DeploymentRelease,
     DeploymentReleaseSource, DeploymentSnapshot, DeploymentStaffAssignment, DeploymentStatus, MaintenanceWindow,
-    OperationalEventStatus, User,
+    OperationalEvent, OperationalEventStatus, User,
 )
 from app.schemas import (
     ApplicationOut, ChangePlanActionRequest, CustomerOut, DeploymentActionAttemptOut, DeploymentActionExecutionOut,
     DeploymentCreate, DeploymentCreateOut, DeploymentLineageUpdate, DeploymentListResponse, DeploymentOut,
     DeploymentReleaseCreate, DeploymentReleaseOut, DeploymentSnapshotOut, DeploymentStaffAssignRequest,
-    ExtendExpiryActionRequest, ReissueTokenOut, RenewActionRequest, StaffOptionOut, SubscriptionRequestReviewAction,
-    SuspendActionRequest,
+    ExtendExpiryActionRequest, OperationalEventOut, ReissueTokenOut, RenewActionRequest, StaffOptionOut,
+    SubscriptionRequestReviewAction, SuspendActionRequest,
 )
 from app.approvals import deployment_hooks
 from app.integrations.github.models import (
@@ -611,3 +611,29 @@ async def record_deployment_release(
         metadata={"version": release.version, "source": "manual"},
     )
     return await _release_out(db, release)
+
+
+# ── timeline (HUB-Expansion.md Phase 9 — unified operational timeline) ────
+
+@router.get("/{deployment_id}/timeline", response_model=list[OperationalEventOut])
+async def get_deployment_timeline(
+    deployment_id: str, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_VIEW)),
+):
+    """Every OperationalEvent already tagged with this deployment_id,
+    newest first — matching HUB-Expansion.md Phase 9's worked example
+    ordering. Deliberately NOT a second aggregation table: heartbeats
+    (Phase 1), GitHub events unambiguously mapped to this deployment
+    (Phase 3), lineage/release events (Phase 4/5), ticket link/timeline
+    events for this deployment's tickets (Phase 6), and maintenance
+    lifecycle events (Phase 7) all already set deployment_id at emission
+    time — this just reads that one column. See ADR-008 for why this is
+    even simpler than Phase 6's ticket_timeline (a ticket has to union
+    several entity types; a deployment's own id is already the one
+    column nearly every domain's events already carry)."""
+    d = await _get_visible_or_404(db, deployment_id, current_user)
+    rows = (await db.execute(
+        select(OperationalEvent).where(OperationalEvent.deployment_id == d.id)
+        .order_by(OperationalEvent.created_at.desc()).limit(200)
+    )).scalars().all()
+    return [OperationalEventOut.model_validate(e) for e in rows]
