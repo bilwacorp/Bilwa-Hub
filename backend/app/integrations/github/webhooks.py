@@ -17,14 +17,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import event_types as et
+from app.integrations.cicd.github_actions import GitHubActionsProvider, looks_like_version
 from app.integrations.github.models import (
     DeploymentGitHubRepository, GitHubIntegration, GitHubRepository, GitHubWebhookEvent, GitHubWebhookEventStatus,
 )
 from app.integrations.github.upsert import upsert_commit, upsert_issue, upsert_pull_request, upsert_release
-from app.models import OperationalEventStatus
+from app.models import DeploymentReleaseSource, OperationalEventStatus
 from app.services.events import record_event
+from app.services.lineage import record_provider_deployment_event
 
 logger = logging.getLogger(__name__)
+
+# HUB-Expansion.md Phase 5 — stateless, safe to share across calls.
+_github_actions_provider = GitHubActionsProvider()
 
 
 async def _resolve_repository(db: AsyncSession, integration: GitHubIntegration, repo_payload: dict) -> GitHubRepository:
@@ -157,13 +162,43 @@ async def _handle_release(db: AsyncSession, integration: GitHubIntegration, webh
     )
 
 
-# event_type (X-GitHub-Event header) -> handler. workflow_run/check_run
-# (CI/CD-relevant, Phase 5) are deliberately absent — a webhook event
-# with no handler here is still persisted (GitHubWebhookEvent) and marked
+async def _handle_workflow_run(db: AsyncSession, integration: GitHubIntegration, webhook_event: GitHubWebhookEvent) -> None:
+    """HUB-Expansion.md Phase 5 — see app/integrations/cicd/github_actions.py
+    for the "is this actually a deploy" heuristic and
+    docs/adr/ADR-005-cicd-integration.md for why workflow_run rather than
+    GitHub's separate Deployments API. Silently records nothing (this
+    webhook still ends up `processed`, just with no side effect) when:
+    the run wasn't a successful completion, its name/path doesn't look
+    like a deploy workflow, or its repository maps to zero/more-than-one
+    Deployment (ambiguous — same rule Phase 3's other handlers already
+    apply via _deployment_id_for, but here it means skipping entirely
+    rather than just leaving OperationalEvent.deployment_id NULL, since a
+    DeploymentRelease row MUST belong to exactly one deployment)."""
+    payload = webhook_event.payload
+    event = _github_actions_provider.receive_deployment_event(payload)
+    if event is None:
+        return
+
+    repository = await _resolve_repository(db, integration, payload["repository"])
+    deployment_id = await _deployment_id_for(db, repository)
+    if deployment_id is None:
+        return
+
+    version = event.ref if looks_like_version(event.ref) else None
+    await record_provider_deployment_event(
+        db, deployment_id=deployment_id, repository_id=repository.id, event=event, version=version,
+        source=DeploymentReleaseSource.github_actions, correlation_id=webhook_event.correlation_id,
+    )
+
+
+# event_type (X-GitHub-Event header) -> handler. check_run (job/step-level,
+# not deployment-level) is deliberately absent — a webhook event with no
+# handler here is still persisted (GitHubWebhookEvent) and marked
 # `processed`, just without any domain-row/OperationalEvent side effect.
 _HANDLERS = {
     "issues": _handle_issues,
     "pull_request": _handle_pull_request,
     "push": _handle_push,
     "release": _handle_release,
+    "workflow_run": _handle_workflow_run,
 }

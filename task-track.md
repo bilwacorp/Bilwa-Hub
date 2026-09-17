@@ -6,9 +6,9 @@ every prior turn, or accidentally redo/undo settled work. `git log
 --oneline` is the authoritative change history; this file is the
 higher-level map of *why* things are where they are and *what's next*.
 
-This file is updated through Phase 4 (deployment lineage), committed on
-`main`. Run `git log --oneline` for the exact current HEAD — don't trust
-a hardcoded hash here going stale as more phases land.
+This file is updated through Phase 5 (CI/CD webhook integration),
+committed on `main`. Run `git log --oneline` for the exact current HEAD
+— don't trust a hardcoded hash here going stale as more phases land.
 
 ## Where to start reading (in this order)
 
@@ -19,8 +19,8 @@ a hardcoded hash here going stale as more phases land.
    in, and the reusable "integration package" shape.
 3. `docs/adr/ADR-001-operational-event-model.md`,
    `ADR-002-execution-state-machine.md`, `ADR-003-github-integration.md`,
-   `ADR-004-deployment-lineage.md` — the specific design tradeoffs made
-   and why, per phase.
+   `ADR-004-deployment-lineage.md`, `ADR-005-cicd-integration.md` — the
+   specific design tradeoffs made and why, per phase.
 4. `docs/integrations/github.md` — full GitHub integration design.
 5. `docs/security/integration-security.md` — Phase 3's security review.
 
@@ -62,7 +62,7 @@ done.
 Postgres-backed harness (`conftest.py` — real dedicated test DB
 `bilwacorp_hub_test`, per-test transaction rollback via
 `join_transaction_mode="create_savepoint"`, Casbin enforcer initialized
-once per session). 66 tests as of Phase 4. **Run with:**
+once per session). 71 tests as of Phase 5. **Run with:**
 ```
 cd backend && source .venv/bin/activate && python -m pytest tests/ -v
 ```
@@ -76,10 +76,13 @@ package: `models.py`/`client.py`/`security.py`/`sync.py`/`webhooks.py`/
 `upsert.py`/`tasks.py`/`api.py`/`webhook_api.py`). Migration `015`.
 Permissions `github.view/manage/test_connection/sync`. Frontend:
 `/github` page (tabs: Integrations/Repositories/Pull Requests/Issues/
-Releases) + a GitHub panel on `DeploymentDetailPage.tsx`. This is now
-the **template package shape** for any future integration (Phase 5's
-CI/CD, or Monitoring) — see `target-state.md`'s "Integration layer"
-section before building a new one from scratch.
+Releases) + a GitHub panel on `DeploymentDetailPage.tsx`. This is the
+**template package shape** for a future integration that has its OWN
+credentials/webhook endpoint (e.g. Monitoring) — see `target-state.md`'s
+"Integration layer" section before building a new one from scratch.
+Phase 5's CI/CD integration deliberately did NOT follow this shape since
+GitHub Actions rides this same package's webhook — see that phase's own
+entry below and ADR-005.
 
 **Phase 4 — Deployment Lineage.** `app/models.py`'s `Customer`/
 `Application`/`DeploymentRelease` + `Deployment.customer_id`/
@@ -106,6 +109,26 @@ anything yet** — that's Phase 5's job, see ADR-004 decision 5/consequence
 Environment/Current version/Release/Commit/Repository/Deployed/Deployed
 by, with Edit-lineage and Record-release modals). Full details: ADR-004.
 
+**Phase 5 — CI/CD webhook integration.** `app/integrations/cicd/`
+(`provider.py`'s `DeploymentProvider`/`DeploymentEventData` abstraction +
+`github_actions.py`'s `GitHubActionsProvider`) plus one new case in
+`app/integrations/github/webhooks.py`'s existing `_HANDLERS` dict:
+`workflow_run`. A successful, deploy-named (`name`/`path` contains
+"deploy") workflow run creates a `DeploymentRelease` row via
+`services/lineage.record_provider_deployment_event` (new — factored
+`_match_release_by_tag` out of Phase 4's `infer_release_from_heartbeat`
+for reuse here), `source=github_actions`. Deliberately did NOT create a
+new `app/integrations/cicd_github/` package following Phase 3's full
+shape — GitHub Actions rides Phase 3's existing GitHub webhook
+(no separate credentials/endpoint of its own), so only the provider
+abstraction + one handler case were needed; see ADR-005 for the full
+reasoning and for why `workflow_run` was chosen over GitHub's separate
+Deployments API (`deployment_status`). No migration — reuses Phase 4's
+`DeploymentRelease` table and `DeploymentReleaseSource.github_actions`
+enum value verbatim. No frontend changes — `DeploymentDetailPage.tsx`'s
+Lineage panel (Phase 4) already renders whatever `current_release` is on
+file regardless of source.
+
 Key things a future phase MUST reuse, not reinvent:
 - `services/crypto.py` for any new encrypted credential.
 - The ONE shared `celery_app` in `services/notifications/tasks.py` —
@@ -128,20 +151,10 @@ per-webhook-delivery chain both work). What's NOT done: nothing stitches
 a support ticket's correlation_id to a GitHub issue's — needs Phase 6
 first. Don't build this standalone; it'll fall out of Phase 6.
 
-**Phase 5 — CI/CD integration (recommended next).** `GitHubWebhookEvent`
-already persists `workflow_run`/`check_run` deliveries today (any event
-type without a handler in `webhooks.py` still gets a row — check
-`github_webhook_events` table for real historical data to backfill from
-once handlers exist). Reuse the Phase 3 package shape exactly. Also the
-natural place to start populating `DeploymentRelease.source=
-github_actions`/`ci_cd` (Phase 4 already defined the enum values and the
-table shape for this — see ADR-004 decision 5 and its "Consequences"
-section — don't re-design the lineage table, just insert rows into it
-from the new webhook handler).
-
-**Phase 6 — Support ↔ Engineering link.** Ticket → GitHub issue → PR →
-release → deployment. Nothing wired yet; `SupportTicket` has no FK/
-reference to any GitHub entity.
+**Phase 6 — Support ↔ Engineering link (recommended next).** Ticket →
+GitHub issue → PR → release → deployment. Nothing wired yet;
+`SupportTicket` has no FK/reference to any GitHub entity. This is also
+what Phase 2 (below) is waiting on for its own correlation-id stitching.
 
 **Phase 7 — Maintenance lifecycle.** Still just create/update/delete;
 no draft/scheduled/approval-required/notification/active/completed/

@@ -25,19 +25,21 @@ complete rather than frozen like the Phase 0 snapshot.
   (Phase 4:         │                     ┌──────────┼──────────┐
    DeploymentRelease│                     ▼          ▼          ▼
    — historized,     │                PULL REQUEST  ISSUE     COMMIT
-   links a version   │                (Phase 3)     (Phase 3) (Phase 3,
-   to a GitHubRelease│                                          push-sourced only)
-   /commit when a     │
-   heartbeat's version │
-   matches a linked repo's
-   release tag, else just
-   records the version
-   change itself)
+   populated 2 ways:  │                (Phase 3)     (Phase 3) (Phase 3,
+   heartbeat-version-  │                                        push-sourced only)
+   match (Phase 4) AND
+   Phase 5's workflow_run
+   webhook handler —
+   see below)
       │
       ▼
    GITHUB (Phase 3: GitHubIntegration, credentials + webhook,
            per-org; repositories/PRs/issues/releases/commits
-           synced + webhook-kept-current)
+           synced + webhook-kept-current. Phase 5: the SAME webhook
+           pipeline also handles `workflow_run` — a successful,
+           deploy-named workflow run creates a DeploymentRelease row
+           via app/integrations/cicd/'s DeploymentProvider abstraction,
+           source='github_actions' — see ADR-005)
       │
    PR / COMMIT (Phase 3 — not yet linked upstream to a ticket)
       │
@@ -114,12 +116,29 @@ version (previously the other gap) closed with Phase 4's
                             follow this same package shape)
 ```
 
-This shape is now proven out once (GitHub) and is the template Phase 5's
-CI/CD integration should follow rather than inventing its own — same
-credential-encryption reuse (`services/crypto.py`), same webhook-
-idempotency-via-unique-constraint mechanism, same Celery-app reuse via a
-bottom-of-file import, same OperationalEvent emission (no second event
-system per integration).
+This shape is proven out once (GitHub) and is the template a future
+integration with its OWN credentials/webhook endpoint (Monitoring, or a
+non-GitHub CI system) should follow — same credential-encryption reuse
+(`services/crypto.py`), same webhook-idempotency-via-unique-constraint
+mechanism, same Celery-app reuse via a bottom-of-file import, same
+OperationalEvent emission (no second event system per integration).
+
+**Phase 5 (CI/CD) deliberately did NOT create a new `app/integrations/
+cicd_github/` package following this shape.** GitHub Actions has no
+separate credentials, webhook URL, or signature secret of its own — it's
+delivered through the exact same GitHub App webhook Phase 3 already
+verifies and persists. Duplicating a whole `models.py`/`security.py`/
+`webhook_api.py`/`tasks.py` stack for "GitHub, but CI/CD flavored" would
+mean a second signature-verification path and a second webhook endpoint
+GitHub would need configuring against, for events that already arrive at
+Phase 3's one. Phase 5 instead added a small `app/integrations/cicd/`
+package holding ONLY the provider abstraction (`provider.py`'s
+`DeploymentProvider`/`DeploymentEventData`, `github_actions.py`'s
+`GitHubActionsProvider`) and one new case in Phase 3's existing
+`webhooks.py` `_HANDLERS` dict (`workflow_run`) — see ADR-005 for the
+full reasoning. A CI system that genuinely has its own credentials/
+webhook (unlike GitHub Actions here) should still follow the full
+package shape above.
 
 ## Still not started (unchanged from the Phase 0 audit unless noted)
 
@@ -128,11 +147,6 @@ system per integration).
   `correlation_id` both work today for their own chains, but nothing yet
   stitches a *support ticket's* correlation_id to a *GitHub issue's* —
   that needs Phase 6's ticket ↔ issue link to exist first.
-- Phase 5 (CI/CD) — `GitHubWebhookEvent` already persists
-  `workflow_run`/`check_run` deliveries (any event type HUB doesn't parse
-  survives as an unprocessed row, per Phase 3's design), so Phase 5 can
-  start from real historical data instead of only new events once it
-  lands.
 - Phase 6 (support ↔ engineering link), Phase 7 (maintenance lifecycle),
   Phase 8 (generic operational approvals beyond deployment actions),
   Phase 9 (unified timeline UI), Phase 10 (dashboard), Phase 11
