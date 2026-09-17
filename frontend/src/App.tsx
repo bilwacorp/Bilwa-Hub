@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutGrid, Ticket, CalendarClock, LogOut, Users, Bell, Menu, X, ShieldCheck, CheckSquare, Workflow, History, Github, Building2, Package } from 'lucide-react'
+import { LayoutGrid, Ticket, CalendarClock, LogOut, Users, Bell, Menu, X, ShieldCheck, CheckSquare, Workflow, History, Github, Building2, Package, LayoutDashboard, Plug } from 'lucide-react'
 import { useAuthStore } from './stores/auth'
 import api from './lib/api'
 import { cn } from './lib/utils'
@@ -26,6 +26,8 @@ import EventsPage from './pages/events/EventsPage'
 import GitHubPage from './pages/github/GitHubPage'
 import CustomersPage from './pages/customers/CustomersPage'
 import ApplicationsPage from './pages/applications/ApplicationsPage'
+import DashboardPage from './pages/dashboard/DashboardPage'
+import IntegrationsPage from './pages/integrations/IntegrationsPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -52,6 +54,7 @@ function RequirePermission({ permission, children }: { permission: string; child
 }
 
 const NAV_ITEMS = [
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, permission: 'dashboard.view' },
   { to: '/deployments', label: 'Deployments', icon: LayoutGrid, permission: 'deployments.view' },
   { to: '/customers', label: 'Customers', icon: Building2, permission: 'customers.view' },
   { to: '/applications', label: 'Applications', icon: Package, permission: 'applications.view' },
@@ -61,6 +64,7 @@ const NAV_ITEMS = [
   { to: '/approvals', label: 'Approvals', icon: CheckSquare, permission: 'approvals.view' },
   { to: '/workflows', label: 'Workflows', icon: Workflow, permission: 'workflows.view' },
   { to: '/github', label: 'GitHub', icon: Github, permission: 'github.view' },
+  { to: '/integrations', label: 'Integrations', icon: Plug, permission: 'integrations.view' },
   { to: '/events', label: 'Events', icon: History, permission: 'events.view' },
 ] as const
 
@@ -209,6 +213,8 @@ export default function App() {
       <Route path="/workflow-rules" element={<RequireAuth><RequirePermission permission="workflow_rules.view"><Shell><ApprovalRulesPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/github" element={<RequireAuth><RequirePermission permission="github.view"><Shell><GitHubPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/events" element={<RequireAuth><RequirePermission permission="events.view"><Shell><EventsPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/dashboard" element={<RequireAuth><RequirePermission permission="dashboard.view"><Shell><DashboardPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/integrations" element={<RequireAuth><RequirePermission permission="integrations.view"><Shell><IntegrationsPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="*" element={<Navigate to="/deployments" replace />} />
     </Routes>
   )

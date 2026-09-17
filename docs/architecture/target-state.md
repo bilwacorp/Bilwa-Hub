@@ -51,9 +51,16 @@ complete rather than frozen like the Phase 0 snapshot.
       │          ENVIRONMENT (Phase 4: Deployment.environment, native
       │          enum, defaults 'production')
       ▼
-  MAINTENANCE (Phase 7 not started — still create/update/delete only,
-               no draft/scheduled/approval-required lifecycle. Phase 6:
-               CAN be a SupportTicketLink target — see SUPPORT below)
+  MAINTENANCE (Phase 7: 9-state lifecycle — draft/approval_required/
+               approved/planned/notification/in_progress/completed/
+               failed/cancelled, see ADR-007. High-risk (fleet-wide or
+               lockout) windows route through Phase 8's expanded
+               approval engine, app/approvals/maintenance_hooks.py —
+               the second business domain on integration.start_approval/
+               hooks.register_completion_hook after deployment_hooks.py.
+               Still binary single-deployment-or-fleet-wide targeting —
+               specific-multiple-deployments deferred, see ADR-007
+               "Consequences")
       │
       ▼
    SUPPORT (Phase 6: SupportTicketLink — a ticket can link to a GitHub
@@ -65,15 +72,39 @@ complete rather than frozen like the Phase 0 snapshot.
       │
       ▼
    APPROVAL (Phase 12/13: gates renew/suspend/change_plan, with a real
-             execution state machine + retry + idempotency — not yet
-             extended to maintenance/other actions, that's Phase 8)
+             execution state machine + retry + idempotency. Phase 8:
+             the SAME generic engine now also gates high-risk
+             maintenance windows — see ADR-007. No execution-state-
+             machine equivalent needed for maintenance: no second
+             external call to retry, just the scheduler's own
+             push/transition machinery it already retries every tick)
       │
       ▼
     AUDIT (Phase 1: OperationalEvent — GitHub events flow into this same
            table via Phase 3, not a second event system; Phase 4's
            customer/application/lineage changes flow into it too; Phase
-           6's ticket timeline reads from it rather than adding a
-           second aggregation store)
+           6's ticket timeline and Phase 9's per-deployment timeline
+           (GET /deployments/{id}/timeline) both read from it rather
+           than adding a second aggregation store; Phase 7 also fixed
+           core/maintenance_scheduler.py to actually call record_event()
+           on auto-transitions — it previously only logged, see ADR-008
+           decision 4)
+      │
+      ▼
+  DASHBOARD (Phase 10: GET /dashboard — fleet/deployments/support/
+             maintenance/approvals/integrations summaries + an
+             "Attention Required" list, all real queries over the above,
+             no new tables. Row-scoped like every other router; sections
+             not naturally deployment-scoped (Approvals, parts of
+             Integrations) zero out rather than 403 when the caller
+             lacks that domain's own view permission — see ADR-008)
+      │
+      ▼
+  INTEGRATION CENTER (Phase 11: GET /integrations — one status card per
+                       GitHub connection, plus single CI/CD/Email/
+                       WhatsApp/Monitoring cards derived from existing
+                       data; never a live external call itself, and
+                       never returns a secret — see ADR-008)
 ```
 
 Every `OperationalEvent`-driven action (deployment lifecycle, tickets,
@@ -85,7 +116,10 @@ Phase 2's formal cross-system correlation is effectively subsumed by that
 same mechanism for the ticket case (ADR-006 decision 4 explains why a
 shared/propagated `correlation_id` doesn't actually work for retroactive
 many-to-one linking, and why entity-reference aggregation is used
-instead).
+instead). Phase 9 extends the same "aggregate by entity reference, don't
+build a second event system" idea to a per-deployment view — trivially,
+since `deployment_id` is already the one column nearly every domain's
+events already carry (see ADR-008 decision 1).
 
 ## Integration layer (Phase 3's shape, reused by future integrations)
 
@@ -151,14 +185,12 @@ package shape above.
 
 ## Still not started (unchanged from the Phase 0 audit unless noted)
 
-- Phase 7 (maintenance lifecycle — still create/update/delete only),
-  Phase 8 (generic operational approvals beyond deployment actions),
-  Phase 9 (unified timeline UI — Phase 6's per-ticket timeline is the
-  first curated aggregation over `OperationalEvent`, but nothing
-  fleet-wide/per-deployment yet), Phase 10 (dashboard), Phase 11
-  (Integration Center UI — Phase 3 already keeps the health fields
-  Phase 11 will read).
 - Phase 14/15/19 (RBAC/security/audit) — largely satisfied incrementally
   by 1/3/12/13's own permission and audit additions; a dedicated pass
   hasn't been done. See `docs/security/integration-security.md` for the
   Phase 3-specific security review.
+- Phase 16/17/18 (Observability / Frontend UX / Deployment detail page)
+  — partially organic (the deployment detail page has accreted Health/
+  Action-Executions/GitHub/Lineage/Timeline sections across phases) but
+  no dedicated pass against `HUB-Expansion.md`'s own suggested structure
+  for that page.

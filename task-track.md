@@ -6,9 +6,12 @@ every prior turn, or accidentally redo/undo settled work. `git log
 --oneline` is the authoritative change history; this file is the
 higher-level map of *why* things are where they are and *what's next*.
 
-This file is updated through Phase 6 (Support ↔ Engineering link),
-committed on `main`. Run `git log --oneline` for the exact current HEAD
-— don't trust a hardcoded hash here going stale as more phases land.
+This file is updated through Phase 11 (Integration Center) — every
+numbered `HUB-Expansion.md` phase except 2 (subsumed, see its own entry
+below), 14/15/16/17/18/19 (RBAC/security/audit/observability/UX passes),
+and 20 (test suite, done as a Phase-0 pull-forward) is now landed.
+Committed on `main`. Run `git log --oneline` for the exact current HEAD
+— don't trust a hardcoded hash here going stale.
 
 ## Where to start reading (in this order)
 
@@ -20,8 +23,10 @@ committed on `main`. Run `git log --oneline` for the exact current HEAD
 3. `docs/adr/ADR-001-operational-event-model.md`,
    `ADR-002-execution-state-machine.md`, `ADR-003-github-integration.md`,
    `ADR-004-deployment-lineage.md`, `ADR-005-cicd-integration.md`,
-   `ADR-006-support-engineering-link.md` — the specific design tradeoffs
-   made and why, per phase.
+   `ADR-006-support-engineering-link.md`,
+   `ADR-007-maintenance-lifecycle-and-approvals.md`,
+   `ADR-008-timeline-dashboard-integration-center.md` — the specific
+   design tradeoffs made and why, per phase.
 4. `docs/integrations/github.md` — full GitHub integration design.
 5. `docs/security/integration-security.md` — Phase 3's security review.
 
@@ -63,7 +68,7 @@ done.
 Postgres-backed harness (`conftest.py` — real dedicated test DB
 `bilwacorp_hub_test`, per-test transaction rollback via
 `join_transaction_mode="create_savepoint"`, Casbin enforcer initialized
-once per session). 79 tests as of Phase 6. **Run with:**
+once per session). 99 tests as of Phase 11. **Run with:**
 ```
 cd backend && source .venv/bin/activate && python -m pytest tests/ -v
 ```
@@ -156,6 +161,77 @@ the ticket's own deployment's linked GitHub repo(s)/maintenance windows)
 and Timeline sections — `SupportTicketsPage.tsx`'s inline status-update
 modal moved there too. Full details: ADR-006.
 
+**Phase 7 — Maintenance lifecycle.** `MaintenanceWindowStatus` widened
+from 4 to 9 values (migration `018`) — `draft`/`approval_required`/
+`approved`/`notification`/`failed` are new; `planned`/`in_progress` are
+NOT renamed to the doc's own "scheduled"/"active" wording (see ADR-007
+decision 1 for why that's the correct reading of "existing behavior must
+remain compatible"). New `MaintenanceWindow` columns: `expected_impact`,
+`actual_impact`, `approved_by`. New endpoint `POST /maintenance-windows/
+{id}/submit` (draft → gate-or-schedule decision). `core/
+maintenance_scheduler.py` now: promotes `approved` → `planned` every
+tick, treats `notification` identically to `planned` everywhere, and —
+important fix pulled in from Phase 9's own needs — actually calls
+`record_event()` on auto-transitions (`maintenance.started`/
+`maintenance.completed`), where it previously only logged. Still binary
+single-deployment-or-fleet-wide targeting — a `MaintenanceWindowDeployment`
+join table for "specific multiple deployments" was deliberately deferred,
+see ADR-007 "Consequences." Frontend: `MaintenanceWindowsPage.tsx` gained
+expected-impact input, a save-as-draft checkbox, a Submit action, and the
+new statuses in its badge map.
+
+**Phase 8 — Generic operational approvals.** Verified `app/approvals/
+integration.py`'s `start_approval()` + `app/approvals/hooks.py`'s
+`register_completion_hook()` ALREADY are the "request approval / provide
+context / register completion callback" interface the phase brief
+describes — zero changes to `app/workflow/` or `app/rules/`. The actual
+work is `app/approvals/maintenance_hooks.py` (new, ~100 lines), the
+second business domain on that interface after `deployment_hooks.py`,
+gating Phase 7's `approval_required` state. Migration `018` also seeds a
+fourth built-in gated workflow, `maintenance_window_approval` (same
+BPMN-template shape as migration 012's three deployment ones, routed to
+'admin'), active by default. No `DeploymentActionExecution`-style
+execution-tracking table for maintenance — there's no second external
+call to retry, see ADR-007 decision 3.
+
+**Phase 9 — Unified operational timeline.** `GET /deployments/{id}/timeline`
+(`api/routers/deployments.py`) — deliberately simpler than Phase 6's
+`ticket_timeline`: `deployment_id` is already the one column nearly
+every domain's events carry, so this is a plain filtered `OperationalEvent`
+query, no entity-type union needed. Frontend: new shared
+`components/ui/EventTimeline.tsx` (factored out of Phase 6's
+`SupportTicketDetailPage.tsx`) + a "Timeline" section on
+`DeploymentDetailPage.tsx`. No new tables, no new permission (reuses
+`deployments.view`'s existing row-scoping).
+
+**Phase 10 — Operations dashboard.** `GET /dashboard`
+(`app/services/dashboard.py`, migration `019` seeds `dashboard.view`) —
+fleet/deployments/support/maintenance/approvals/integrations summaries +
+an "Attention Required" list, every number a real query over existing
+data (no new tables). Row-scoped like every other router for
+deployment-tied sections; Approvals/parts of Integrations zero out
+(not 403) when the caller lacks that domain's own view permission — see
+ADR-008 decision 2. "Outdated version"/"high risk"/"unassigned ticket"/
+"escalated"/"awaiting engineering" are documented proxies with no
+first-class flag anywhere else in this codebase — see ADR-008 decision 3
+for the exact definition of each before reusing or changing one.
+Frontend: new `/dashboard` page, first in the nav.
+
+**Phase 11 — Integration Center.** `GET /integrations`
+(`api/routers/integrations.py`, migration `020` seeds
+`integrations.view`) — one card per configured `GitHubIntegration`
+(or a placeholder if none), plus single CI/CD/Email/WhatsApp/Monitoring
+cards. Never makes a live external call itself (the one exception, the
+GitHub "Test Connection" button, reuses the already-existing
+`POST /github/integrations/{id}/test-connection` endpoint) and never
+returns a secret. CI/CD's card derives status from whether any
+`DeploymentRelease.source IN (github_actions, ci_cd)` row exists —
+consistent with ADR-005's "rides the GitHub webhook" design. Email/
+WhatsApp read `NotificationLog` gated by whether the relevant SMTP/
+WhatsApp setting is non-empty. Monitoring is a permanent
+`not_configured` placeholder — no monitoring integration exists.
+Frontend: new `/integrations` page.
+
 Key things a future phase MUST reuse, not reinvent:
 - `services/crypto.py` for any new encrypted credential.
 - The ONE shared `celery_app` in `services/notifications/tasks.py` —
@@ -180,27 +256,10 @@ unpopulated and is not expected to be the mechanism a future cross-system
 chain uses; follow Phase 6's aggregation pattern instead if another
 "stitch two independently-caused chains together" need comes up.
 
-**Phase 7 — Maintenance lifecycle (recommended next).** Still just create/update/delete;
-no draft/scheduled/approval-required/notification/active/completed/
-failed lifecycle. `MaintenanceWindowStatus` enum would need extending.
-
-**Phase 8 — Generic operational approvals.** The workflow/approval
-engine (Phase pre-existing, gates renew/suspend/change_plan only) hasn't
-been extended to maintenance or other action types.
-
-**Phase 9 — Unified operational timeline (UI).** No fleet-wide or
-per-deployment timeline page. Phase 6's `GET /tickets/{id}/timeline` is
-the first curated (not flat-filtered) aggregation over `OperationalEvent`
-— same entity-reference-union pattern this phase should reuse for a
-per-deployment view, rather than the `/events` page's flat filtered log
-(Phase 1) or inventing a third approach.
-
-**Phase 10 — Operations dashboard.** Not started at all.
-
-**Phase 11 — Integration Center UI.** Not started — but Phase 3's
-`GitHubIntegration.status/last_synced_at/last_webhook_at/last_error(_at)`
-fields are exactly the data this page will read. When building it, query
-those fields directly; don't add new health-tracking columns.
+Every other numbered phase (1, 3-13, 20) is landed as of this tracker's
+last update (Phase 11) — see "Completed phases" above. What's left is
+the cross-cutting/dedicated-pass phases below, none of which are
+blocking anything else:
 
 **Phase 14/15/19 — RBAC/Security/Audit passes.** Largely satisfied
 incrementally by what 1/3/12/13 already added (each phase did its own
