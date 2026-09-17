@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import event_types as et
 from app.core.permissions import STAFF_CREATE, STAFF_RESET_PASSWORD, STAFF_UPDATE, STAFF_VIEW, require_permission
 from app.core.security import get_password_hash
 from app.db.session import get_db
@@ -19,6 +20,7 @@ from app.schemas import (
     PasswordResetRequest, StaffUserCreate, StaffUserListResponse, StaffUserOut, StaffUserUpdate,
 )
 from app.services import rbac
+from app.services.events import record_event
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -62,6 +64,11 @@ async def create_user(body: StaffUserCreate, db: AsyncSession = Depends(get_db),
     except IntegrityError:
         raise HTTPException(status.HTTP_409_CONFLICT, "Username or email already in use")
     await rbac.set_role(str(user.id), body.role)
+    record_event(
+        db, event_type=et.STAFF_CREATED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF, actor_id=current_user.id,
+        entity_type=et.ENTITY_USER, entity_id=user.id,
+        metadata={"username": user.username, "role": body.role},
+    )
     return await _out(user)
 
 
@@ -98,9 +105,14 @@ async def update_user(
     if losing_staff_update and await rbac.count_users_with_permission(db, *STAFF_UPDATE) <= 1:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot remove the last staff member who can manage staff accounts")
 
+    # HUB-Expansion.md Phase 19 — capture before-values for every field this
+    # request actually changes, so the one record_event() call below carries
+    # a full previous_state/new_state, not just "something changed."
+    changes: dict = {}
     for field in ("full_name", "email", "phone", "is_active"):
         value = getattr(body, field)
-        if value is not None:
+        if value is not None and value != getattr(user, field):
+            changes[field] = {"from": getattr(user, field), "to": value}
             setattr(user, field, value)
     try:
         await db.flush()
@@ -113,6 +125,22 @@ async def update_user(
         user.token_version += 1
         await db.flush()
 
+    if role_changing:
+        event_type = et.STAFF_ROLE_CHANGED
+    elif "is_active" in changes and changes["is_active"]["to"] is False:
+        event_type = et.STAFF_DEACTIVATED
+    elif "is_active" in changes and changes["is_active"]["to"] is True:
+        event_type = et.STAFF_REACTIVATED
+    else:
+        event_type = et.STAFF_UPDATED
+    if role_changing:
+        changes["role"] = {"from": current_role, "to": body.role}
+    if changes:
+        record_event(
+            db, event_type=event_type, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF, actor_id=current_user.id,
+            entity_type=et.ENTITY_USER, entity_id=user.id, metadata={"username": user.username, "changes": changes},
+        )
+
     return await _out(user)
 
 
@@ -124,4 +152,10 @@ async def reset_password(
     user = await _get_user_or_404(db, user_id)
     user.hashed_password = get_password_hash(body.new_password)
     user.token_version += 1
+    # Never the password itself in metadata — just that a reset happened.
+    record_event(
+        db, event_type=et.STAFF_PASSWORD_RESET, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF,
+        actor_id=current_user.id, entity_type=et.ENTITY_USER, entity_id=user.id,
+        metadata={"username": user.username},
+    )
     await db.flush()

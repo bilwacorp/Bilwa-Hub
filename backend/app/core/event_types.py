@@ -45,6 +45,8 @@ ENTITY_GITHUB_WEBHOOK_EVENT = "github_webhook_event"
 ENTITY_CUSTOMER = "customer"
 ENTITY_APPLICATION = "application"
 ENTITY_DEPLOYMENT_RELEASE = "deployment_release"
+ENTITY_USER = "user"
+ENTITY_ROLE = "role"
 
 # ── deployment lifecycle ──────────────────────────────────────────────────
 DEPLOYMENT_REGISTERED = "deployment.registered"
@@ -138,3 +140,18 @@ APPLICATION_CREATED = "application.created"
 APPLICATION_UPDATED = "application.updated"
 DEPLOYMENT_LINEAGE_UPDATED = "deployment.lineage_updated"
 DEPLOYMENT_RELEASE_RECORDED = "deployment.release_recorded"
+
+# ── staff / RBAC (HUB-Expansion.md Phase 19 — sensitive-action audit).
+# Previously NEITHER users.py NOR rbac.py emitted any OperationalEvent at
+# all — a real gap for exactly the actions Phase 19's own list calls out
+# (who can do what, and who changed it). ──────────────────────────────────
+STAFF_CREATED = "staff.created"
+STAFF_UPDATED = "staff.updated"
+STAFF_ROLE_CHANGED = "staff.role_changed"
+STAFF_DEACTIVATED = "staff.deactivated"
+STAFF_REACTIVATED = "staff.reactivated"
+STAFF_PASSWORD_RESET = "staff.password_reset"
+ROLE_CREATED = "role.created"
+ROLE_RENAMED = "role.renamed"
+ROLE_DELETED = "role.deleted"
+ROLE_PERMISSIONS_UPDATED = "role.permissions_updated"

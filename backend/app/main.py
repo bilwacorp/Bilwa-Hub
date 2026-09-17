@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.casbin_enforcer import init_enforcer
 from app.core.casbin_watcher import start_watcher, stop_watcher
+from app.core.request_context import set_client_ip
 from app.core.maintenance_scheduler import start_scheduler as start_maintenance_scheduler, stop_scheduler as stop_maintenance_scheduler
 from app.core.expiry_reminder_scheduler import start_scheduler as start_expiry_scheduler, stop_scheduler as stop_expiry_scheduler
 from app.api.routers import (
@@ -80,6 +81,22 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
     response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
     return response
+
+
+@app.middleware("http")
+async def client_ip_middleware(request: Request, call_next):
+    # HUB-Expansion.md Phase 19 — "audit: ... IP where appropriate," read
+    # back by services/events.py's record_event() via a contextvar (see
+    # core/request_context.py) rather than threading `request` through
+    # every call site. X-Real-IP is set directly to $remote_addr by the
+    # ONE trusted hop in front of this backend (frontend/nginx.conf — see
+    # CLAUDE.md: this backend has no public domain of its own, every
+    # request arrives via that proxy), so it isn't attacker-overridable
+    # the way an X-Forwarded-For prefix could be; request.client.host is
+    # the fallback for local/dev, where there's no proxy in front at all.
+    client_ip = request.headers.get("x-real-ip") or (request.client.host if request.client else None)
+    set_client_ip(client_ip)
+    return await call_next(request)
 
 
 @app.middleware("http")

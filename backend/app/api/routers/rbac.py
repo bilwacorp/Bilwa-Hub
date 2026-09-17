@@ -13,11 +13,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import event_types as et
 from app.core.permissions import RBAC_MANAGE, RBAC_VIEW, require_permission
 from app.db.session import get_db
 from app.models import Role
 from app.schemas import PermissionOut, RoleCreate, RoleOut, RolePermissionsUpdate, RoleUpdate
 from app.services import rbac
+from app.services.events import record_event
 
 router = APIRouter(prefix="/rbac", tags=["rbac"])
 
@@ -59,6 +61,10 @@ async def create_role(body: RoleCreate, db: AsyncSession = Depends(get_db), curr
         await db.flush()
     except IntegrityError:
         raise HTTPException(status.HTTP_409_CONFLICT, f"A role named {body.name!r} already exists")
+    record_event(
+        db, event_type=et.ROLE_CREATED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF, actor_id=current_user.id,
+        entity_type=et.ENTITY_ROLE, entity_id=role.id, metadata={"name": role.name},
+    )
     return role
 
 
@@ -77,6 +83,10 @@ async def update_role(role_id: uuid.UUID, body: RoleUpdate, db: AsyncSession = D
         # Rewrite casbin_rule's p/g rows to the new name — roles.name has
         # no DB-level FK into casbin_rule (see services/rbac.py).
         await rbac.rename_role_policies(old_name, body.name)
+        record_event(
+            db, event_type=et.ROLE_RENAMED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF, actor_id=current_user.id,
+            entity_type=et.ENTITY_ROLE, entity_id=role.id, metadata={"from_name": old_name, "to_name": body.name},
+        )
     if body.description is not None:
         role.description = body.description
     await db.flush()
@@ -99,6 +109,10 @@ async def delete_role(role_id: uuid.UUID, db: AsyncSession = Depends(get_db), cu
             "Deleting this role would leave nobody able to manage roles and permissions",
         )
 
+    record_event(
+        db, event_type=et.ROLE_DELETED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF, actor_id=current_user.id,
+        entity_type=et.ENTITY_ROLE, entity_id=role.id, metadata={"name": role.name, "permissions": [f"{r}.{a}" for r, a in role_perms]},
+    )
     await rbac.delete_role_policies(role.name)
     await db.delete(role)
     await db.flush()
@@ -129,4 +143,13 @@ async def set_role_permissions(role_id: uuid.UUID, body: RolePermissionsUpdate, 
             )
 
     await rbac.set_role_permissions(role.name, desired)
+    record_event(
+        db, event_type=et.ROLE_PERMISSIONS_UPDATED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF,
+        actor_id=current_user.id, entity_type=et.ENTITY_ROLE, entity_id=role.id,
+        metadata={
+            "name": role.name,
+            "previous_permissions": sorted(f"{r}.{a}" for r, a in current),
+            "new_permissions": sorted(f"{r}.{a}" for r, a in desired),
+        },
+    )
     return [f"{r}.{a}" for r, a in desired]

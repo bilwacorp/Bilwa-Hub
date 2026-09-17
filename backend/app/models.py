@@ -528,6 +528,11 @@ class OperationalEvent(Base):
     - customer_id is nullable and, as of Phase 1, never populated — there
       is no Customer table yet (see HUB-Expansion.md Phase 4); the column
       exists now so it doesn't need a follow-up migration once one lands.
+    - actor_ip (HUB-Expansion.md Phase 19) is read from core/
+      request_context's contextvar by services/events.record_event(), not
+      passed by any caller — see that module's docstring. Null for every
+      system-originated event (the maintenance scheduler, a Celery task),
+      correctly, same as those events' actor_id already being null.
     """
     __tablename__ = "operational_events"
 
@@ -536,6 +541,7 @@ class OperationalEvent(Base):
     source: Mapped[str] = mapped_column(String(50), nullable=False)
     actor_type: Mapped[str] = mapped_column(String(30), nullable=False)
     actor_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    actor_ip: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
     entity_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     entity_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     deployment_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("deployments.id"), nullable=True, index=True)

@@ -632,6 +632,7 @@ class OperationalEventOut(BaseModel):
     source: str
     actor_type: str
     actor_id: Optional[uuid.UUID]
+    actor_ip: Optional[str] = None
     entity_type: Optional[str]
     entity_id: Optional[uuid.UUID]
     deployment_id: Optional[uuid.UUID]
