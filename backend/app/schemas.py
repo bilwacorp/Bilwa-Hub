@@ -5,8 +5,9 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, field_serializer, field_validator
 
 from app.models import (
-    DeploymentActionAttemptStatus, DeploymentActionExecutionStatus, DeploymentStatus, MaintenanceWindowStatus,
-    NotificationChannel, NotificationStatus, OperationalEventStatus, SupportTicketStatus,
+    DeploymentActionAttemptStatus, DeploymentActionExecutionStatus, DeploymentEnvironment, DeploymentReleaseSource,
+    DeploymentStatus, MaintenanceWindowStatus, NotificationChannel, NotificationStatus, OperationalEventStatus,
+    SupportTicketStatus,
 )
 
 # How hard an active maintenance window bites (MaintenanceWindow.mode):
@@ -222,6 +223,101 @@ class SupportTicketIngest(BaseModel):
 
 # ── deployments (staff) ─────────────────────────────────────────────────
 
+# ── customers / applications (HUB-Expansion.md Phase 4) ───────────────────
+
+class CustomerOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    slug: str
+    notes: Optional[str]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CustomerCreate(BaseModel):
+    name: str
+    slug: str
+    notes: Optional[str] = None
+
+
+class CustomerUpdate(BaseModel):
+    name: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ApplicationOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    slug: str
+    description: Optional[str]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ApplicationCreate(BaseModel):
+    name: str
+    slug: str
+    description: Optional[str] = None
+
+
+class ApplicationUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+# ── deployment lineage (HUB-Expansion.md Phase 4) ─────────────────────────
+
+class DeploymentLineageUpdate(BaseModel):
+    """PATCH body for /deployments/{id}/lineage — every field optional so
+    a caller can update just one of the three without re-sending the
+    others. An explicit null clears customer_id/application_id (unsets
+    the link); environment, being non-nullable on the model, simply isn't
+    included in the request if left unchanged."""
+    customer_id: Optional[uuid.UUID] = None
+    application_id: Optional[uuid.UUID] = None
+    environment: Optional[DeploymentEnvironment] = None
+
+
+class DeploymentReleaseCreate(BaseModel):
+    """Manual entry (source is always forced to 'manual' by the router,
+    never taken from the request body — see api/routers/deployments.py)."""
+    version: Optional[str] = None
+    repository_id: Optional[uuid.UUID] = None
+    release_id: Optional[uuid.UUID] = None
+    commit_sha: Optional[str] = None
+    deployed_by: Optional[str] = None
+    deployed_at: Optional[datetime] = None
+    notes: Optional[str] = None
+
+    @field_validator("deployed_at")
+    @classmethod
+    def _naive_utc(cls, v):
+        return _to_naive_utc(v) if v else v
+
+
+class DeploymentReleaseOut(BaseModel):
+    id: uuid.UUID
+    deployment_id: uuid.UUID
+    version: Optional[str]
+    repository_id: Optional[uuid.UUID]
+    release_id: Optional[uuid.UUID]
+    commit_sha: Optional[str]
+    source: DeploymentReleaseSource
+    deployed_by: Optional[str]
+    deployed_at: datetime
+    notes: Optional[str]
+    created_at: datetime
+    # Denormalized display fields, filled in by the router from a join —
+    # never populated by model_validate(release) alone (see
+    # api/routers/deployments.py's _release_out).
+    repository_full_name: Optional[str] = None
+    release_tag_name: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
 class DeploymentCreate(BaseModel):
     client_name: str
     slug: str
@@ -284,6 +380,15 @@ class DeploymentOut(BaseModel):
     # Staff assigned to this deployment (services/notifications/recipients.py
     # narrows ticket/subscription-request alerts to just these when non-empty).
     assigned_staff: List[StaffOptionOut] = []
+    # HUB-Expansion.md Phase 4 lineage — customer/application are None when
+    # unlinked (both optional, see app/models.py's Customer/Application).
+    # current_release is the most recent DeploymentRelease row, if any.
+    environment: DeploymentEnvironment = DeploymentEnvironment.production
+    customer_id: Optional[uuid.UUID] = None
+    application_id: Optional[uuid.UUID] = None
+    customer: Optional[CustomerOut] = None
+    application: Optional[ApplicationOut] = None
+    current_release: Optional[DeploymentReleaseOut] = None
 
     model_config = {"from_attributes": True}
 

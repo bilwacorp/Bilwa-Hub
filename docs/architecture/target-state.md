@@ -9,8 +9,10 @@ complete rather than frozen like the Phase 0 snapshot.
 ## Landed
 
 ```
-                CUSTOMER                     (still just Deployment.client_name —
-                   │                           no separate table; Phase 4)
+                CUSTOMER (Phase 4: Customer table, additive — Deployment
+                   │      .client_name is untouched, customer_id is a
+                   │      nullable FK; migration 016 backfilled one
+                   │      Customer per distinct client_name)
                    ▼
              DEPLOYMENT ────────────────────────────┐
                    │                                │
@@ -20,11 +22,17 @@ complete rather than frozen like the Phase 0 snapshot.
       │            │             │           a deployment can map to >1 repo,
       ▼            ▼             ▼           a repo can serve >1 deployment)
    RELEASE      HEARTBEAT      PLAN                  │
-  (Phase 3:         │                     ┌──────────┼──────────┐
-   GitHubRelease,    │                     ▼          ▼          ▼
-   not yet linked                     PULL REQUEST  ISSUE     COMMIT
-   to a deployed                     (Phase 3)     (Phase 3) (Phase 3,
-   version — Phase 4)                                          push-sourced only)
+  (Phase 4:         │                     ┌──────────┼──────────┐
+   DeploymentRelease│                     ▼          ▼          ▼
+   — historized,     │                PULL REQUEST  ISSUE     COMMIT
+   links a version   │                (Phase 3)     (Phase 3) (Phase 3,
+   to a GitHubRelease│                                          push-sourced only)
+   /commit when a     │
+   heartbeat's version │
+   matches a linked repo's
+   release tag, else just
+   records the version
+   change itself)
       │
       ▼
    GITHUB (Phase 3: GitHubIntegration, credentials + webhook,
@@ -34,8 +42,12 @@ complete rather than frozen like the Phase 0 snapshot.
    PR / COMMIT (Phase 3 — not yet linked upstream to a ticket)
       │
       ▼
-  DEPLOYMENT
+  DEPLOYMENT ── APPLICATION (Phase 4: Application table, a nullable
+      │          Deployment.application_id — grouping only; no edge of
+      │          its own to GitHubRepository, see ADR-004 decision 2)
       │
+      │          ENVIRONMENT (Phase 4: Deployment.environment, native
+      │          enum, defaults 'production')
       ▼
   MAINTENANCE (Phase 7 not started — still create/update/delete only,
                no draft/scheduled/approval-required lifecycle)
@@ -50,17 +62,19 @@ complete rather than frozen like the Phase 0 snapshot.
       │
       ▼
     AUDIT (Phase 1: OperationalEvent — GitHub events flow into this same
-           table via Phase 3, not a second event system)
+           table via Phase 3, not a second event system; Phase 4's
+           customer/application/lineage changes flow into it too)
 ```
 
 Every `OperationalEvent`-driven action (deployment lifecycle, tickets,
-maintenance, approvals, GitHub) is traceable WHO → WHAT → WHEN → WHICH
-DEPLOYMENT → WHICH EXTERNAL SYSTEM → RESULT today, for the domains that
-exist. The two gaps in that chain right now are exactly the two edges the
-diagram above marks "not yet": ticket ↔ GitHub issue (Phase 6) and
-release ↔ deployed version (Phase 4) — WHY (the business reason an action
-was taken) still lives only in a ticket's own free-text description or a
-PR's title, not as a structured link.
+maintenance, approvals, GitHub, lineage) is traceable WHO → WHAT → WHEN →
+WHICH DEPLOYMENT → WHICH EXTERNAL SYSTEM → RESULT today, for the domains
+that exist. The one gap left in that chain is the one Phase 4 didn't
+close: ticket ↔ GitHub issue (Phase 6) — WHY (the business reason an
+action was taken) still lives only in a ticket's own free-text
+description or a PR's title, not as a structured link. Release ↔ deployed
+version (previously the other gap) closed with Phase 4's
+`DeploymentRelease` table — see ADR-004.
 
 ## Integration layer (Phase 3's shape, reused by future integrations)
 
@@ -114,10 +128,6 @@ system per integration).
   `correlation_id` both work today for their own chains, but nothing yet
   stitches a *support ticket's* correlation_id to a *GitHub issue's* —
   that needs Phase 6's ticket ↔ issue link to exist first.
-- Phase 4 (Customer/Application tables, deployment lineage) — Phase 3
-  deliberately built `Deployment ↔ GitHubRepository` as the extensible
-  edge Phase 4 should hang `Application` off of, without inventing
-  `Application`/`Customer` itself.
 - Phase 5 (CI/CD) — `GitHubWebhookEvent` already persists
   `workflow_run`/`check_run` deliveries (any event type HUB doesn't parse
   survives as an unprocessed row, per Phase 3's design), so Phase 5 can

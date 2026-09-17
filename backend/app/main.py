@@ -12,7 +12,10 @@ from app.core.casbin_enforcer import init_enforcer
 from app.core.casbin_watcher import start_watcher, stop_watcher
 from app.core.maintenance_scheduler import start_scheduler as start_maintenance_scheduler, stop_scheduler as stop_maintenance_scheduler
 from app.core.expiry_reminder_scheduler import start_scheduler as start_expiry_scheduler, stop_scheduler as stop_expiry_scheduler
-from app.api.routers import auth, register, ingest, deployments, tickets, maintenance, users, notifications, rbac, events
+from app.api.routers import (
+    applications, auth, customers, deployments, events, ingest, maintenance, notifications, rbac, register, tickets,
+    users,
+)
 from app.approvals import api as approvals_api
 from app.approvals import deployment_hooks  # noqa: F401 — registers deployment completion hooks at import time
 from app.integrations.github import api as github_api
@@ -109,6 +112,8 @@ app.include_router(users.router, prefix=PREFIX)
 app.include_router(notifications.router, prefix=PREFIX)
 app.include_router(rbac.router, prefix=PREFIX)
 app.include_router(events.router, prefix=PREFIX)
+app.include_router(customers.router, prefix=PREFIX)
+app.include_router(applications.router, prefix=PREFIX)
 app.include_router(workflow_api.router, prefix=PREFIX)
 app.include_router(workflow_api.instances_router, prefix=PREFIX)
 app.include_router(rules_api.router, prefix=PREFIX)

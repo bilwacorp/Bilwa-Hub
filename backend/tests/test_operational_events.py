@@ -36,9 +36,13 @@ async def test_heartbeat_ingest_emits_event(client, db_session):
     assert resp.status_code == 200
 
     events = (await db_session.execute(
-        select(OperationalEvent).where(OperationalEvent.deployment_id == d.id)
+        select(OperationalEvent).where(OperationalEvent.deployment_id == d.id).order_by(OperationalEvent.created_at)
     )).scalars().all()
-    assert [e.event_type for e in events] == ["deployment.heartbeat_received"]
+    # HUB-Expansion.md Phase 4: a heartbeat carrying an app_version this
+    # deployment hasn't reported before also emits a lineage event (see
+    # app/services/lineage.py's infer_release_from_heartbeat) — this is
+    # the very first version this deployment has ever reported.
+    assert [e.event_type for e in events] == ["deployment.heartbeat_received", "deployment.release_recorded"]
     assert events[0].source == "deployment"
     assert events[0].actor_type == "deployment"
 

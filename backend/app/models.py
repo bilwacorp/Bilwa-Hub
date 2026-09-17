@@ -84,6 +84,54 @@ class DeploymentStatus(str, enum.Enum):
     suspended = "suspended"   # BilwaCorp-side flag, not currently enforced by any gate
 
 
+class DeploymentEnvironment(str, enum.Enum):
+    """HUB-Expansion.md Phase 4's "Environment" lineage field. A HUB-owned
+    closed set (ADR-001's enum-vs-string rule), unlike e.g.
+    GitHubPullRequest.state which mirrors an external vocabulary. Almost
+    every row today is 'production' (CLAUDE.md: each client deployment is
+    its own single-tenant, separately hosted instance) — staging/development/
+    uat exist for the rarer non-client instance (e.g. a BilwaCorp-internal
+    demo or pre-prod box) that still registers with this same hub."""
+    production = "production"
+    staging = "staging"
+    development = "development"
+    uat = "uat"
+
+
+class Customer(Base):
+    """HUB-Expansion.md Phase 4. The organization a Deployment belongs to —
+    deliberately additive, not a replacement for Deployment.client_name
+    (which every existing query/notification/UI already reads and keeps
+    reading unchanged, per the plan's "DO NOT rewrite the existing
+    application" rule). Deployment.customer_id is nullable and optional:
+    a deployment with no customer link still works exactly as before,
+    just without the grouping. One customer can own more than one
+    deployment (e.g. separate prod/staging instances)."""
+    __tablename__ = "customers"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class Application(Base):
+    """HUB-Expansion.md Phase 4. The software product a Deployment is
+    running (e.g. "PoultryOS-CBP") — a grouping layer above the Phase 3
+    Deployment<->GitHubRepository M:N edge (ADR-003/target-state.md: "build
+    Application on top of it", not a migration of that relationship).
+    Deployment.application_id is nullable/optional for the same reason as
+    Customer above."""
+    __tablename__ = "applications"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class Deployment(Base):
     """One row per client PoultryOS-CBP instance. See the plan's "Two
     credentials, not one" section for why api_key is hash-only but
@@ -98,6 +146,14 @@ class Deployment(Base):
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     base_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     status: Mapped[DeploymentStatus] = mapped_column(Enum(DeploymentStatus), default=DeploymentStatus.pending, nullable=False)
+
+    # HUB-Expansion.md Phase 4 lineage fields — both nullable/optional, see
+    # Customer/Application's own docstrings for why.
+    customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"), nullable=True)
+    application_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("applications.id"), nullable=True)
+    environment: Mapped[DeploymentEnvironment] = mapped_column(
+        Enum(DeploymentEnvironment), default=DeploymentEnvironment.production, nullable=False,
+    )
 
     registration_token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     registration_token_consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -119,6 +175,11 @@ class Deployment(Base):
     snapshots: Mapped[list["DeploymentSnapshot"]] = relationship(
         "DeploymentSnapshot", back_populates="deployment", order_by="DeploymentSnapshot.received_at.desc()",
     )
+    # Deliberately no customer/application relationship() here — this
+    # codebase never triggers a lazy load implicitly under AsyncSession
+    # (see DeploymentActionExecutionOut's _execution_out docstring for the
+    # same rule applied to .attempts); callers batch-query Customer/
+    # Application explicitly instead, same shape as _assigned_staff_map.
 
 
 class DeploymentStaffAssignment(Base):
@@ -156,6 +217,50 @@ class DeploymentSnapshot(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     deployment: Mapped["Deployment"] = relationship("Deployment", back_populates="snapshots")
+
+
+class DeploymentReleaseSource(str, enum.Enum):
+    """HUB-Expansion.md Phase 4's "Deployment source" lineage field — a
+    HUB-owned closed set. 'heartbeat_inferred' is the only source this
+    phase populates automatically (services/lineage.py's
+    infer_release_from_heartbeat, called from ingest.py on every
+    heartbeat whose app_version changed) by matching the reported version
+    against a GitHubRelease tag on one of the deployment's linked repos
+    (Phase 3's DeploymentGitHubRepository). 'manual' is a staff-entered
+    correction/backfill (POST /deployments/{id}/releases). 'github_actions'
+    /'ci_cd' are reserved for Phase 5's CI/CD webhook integration — this
+    phase only defines the shape, it does not implement that source."""
+    manual = "manual"
+    heartbeat_inferred = "heartbeat_inferred"
+    github_actions = "github_actions"
+    ci_cd = "ci_cd"
+
+
+class DeploymentRelease(Base):
+    """HUB-Expansion.md Phase 4. One row per recorded "this deployment
+    started running this version" event — historized like
+    DeploymentSnapshot rather than a single mutable "current version"
+    column, so the lineage view can show a real history, not just a
+    snapshot-in-time. The most recent row (by deployed_at) for a
+    deployment is its "current" release. repository_id/release_id are
+    plain UUID FK columns (not ORM relationships) into
+    app.integrations.github.models's GitHubRepository/GitHubRelease —
+    deliberately, so this core module never imports that integration
+    package; callers resolve the join explicitly the same way
+    api/routers/deployments.py's GitHub panel already does."""
+    __tablename__ = "deployment_releases"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    deployment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="CASCADE"), nullable=False)
+    version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    repository_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("github_repositories.id"), nullable=True)
+    release_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("github_releases.id"), nullable=True)
+    commit_sha: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    source: Mapped[DeploymentReleaseSource] = mapped_column(Enum(DeploymentReleaseSource), nullable=False)
+    deployed_by: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    deployed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class DeploymentActionExecutionStatus(str, enum.Enum):

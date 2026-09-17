@@ -6,8 +6,9 @@ every prior turn, or accidentally redo/undo settled work. `git log
 --oneline` is the authoritative change history; this file is the
 higher-level map of *why* things are where they are and *what's next*.
 
-Repo is clean — everything below is committed on `main` as of
-`d0a6e84`. No uncommitted work, no half-finished migrations.
+This file is updated through Phase 4 (deployment lineage), committed on
+`main`. Run `git log --oneline` for the exact current HEAD — don't trust
+a hardcoded hash here going stale as more phases land.
 
 ## Where to start reading (in this order)
 
@@ -17,8 +18,9 @@ Repo is clean — everything below is committed on `main` as of
    land. Shows the target diagram with what's actually built annotated
    in, and the reusable "integration package" shape.
 3. `docs/adr/ADR-001-operational-event-model.md`,
-   `ADR-002-execution-state-machine.md`, `ADR-003-github-integration.md`
-   — the specific design tradeoffs made and why, per phase.
+   `ADR-002-execution-state-machine.md`, `ADR-003-github-integration.md`,
+   `ADR-004-deployment-lineage.md` — the specific design tradeoffs made
+   and why, per phase.
 4. `docs/integrations/github.md` — full GitHub integration design.
 5. `docs/security/integration-security.md` — Phase 3's security review.
 
@@ -60,7 +62,7 @@ done.
 Postgres-backed harness (`conftest.py` — real dedicated test DB
 `bilwacorp_hub_test`, per-test transaction rollback via
 `join_transaction_mode="create_savepoint"`, Casbin enforcer initialized
-once per session). 55 tests as of Phase 3. **Run with:**
+once per session). 66 tests as of Phase 4. **Run with:**
 ```
 cd backend && source .venv/bin/activate && python -m pytest tests/ -v
 ```
@@ -78,6 +80,31 @@ Releases) + a GitHub panel on `DeploymentDetailPage.tsx`. This is now
 the **template package shape** for any future integration (Phase 5's
 CI/CD, or Monitoring) — see `target-state.md`'s "Integration layer"
 section before building a new one from scratch.
+
+**Phase 4 — Deployment Lineage.** `app/models.py`'s `Customer`/
+`Application`/`DeploymentRelease` + `Deployment.customer_id`/
+`application_id`/`environment`. Migration `016` backfills one `Customer`
+per distinct `client_name` (additive — `client_name` itself is untouched,
+see ADR-004 decision 1). `Application` sits above Phase 3's `Deployment
+↔ GitHubRepository` M:N without adding a second edge of its own (ADR-004
+decision 2 — a deliberate scope cut, not an oversight). `DeploymentRelease`
+is historized like `DeploymentSnapshot`, not a mutable column; the most
+recent row per deployment is its "current" release
+(`services/lineage.current_releases_map`). Two ways a row gets created
+today: `POST /deployments/{id}/releases` (manual, `deployments.
+manage_lineage`) and `services/lineage.infer_release_from_heartbeat`
+(automatic, wired into `ingest.py`'s heartbeat handler — matches the
+heartbeat's `app_version` against a `GitHubRelease` tag on one of the
+deployment's linked repos; no match still records the version change with
+`repository_id`/`release_id`/`commit_sha` left NULL). `source=
+github_actions`/`ci_cd` are defined in the enum but **not populated by
+anything yet** — that's Phase 5's job, see ADR-004 decision 5/consequence
+2. New permissions: `customers.view/manage`, `applications.view/manage`,
+`deployments.manage_lineage` (all in migration `016`). Frontend:
+`/customers` and `/applications` pages (simple CRUD, admin-managed) + a
+"Lineage" panel on `DeploymentDetailPage.tsx` (Customer/Application/
+Environment/Current version/Release/Commit/Repository/Deployed/Deployed
+by, with Edit-lineage and Record-release modals). Full details: ADR-004.
 
 Key things a future phase MUST reuse, not reinvent:
 - `services/crypto.py` for any new encrypted credential.
@@ -101,23 +128,16 @@ per-webhook-delivery chain both work). What's NOT done: nothing stitches
 a support ticket's correlation_id to a GitHub issue's — needs Phase 6
 first. Don't build this standalone; it'll fall out of Phase 6.
 
-**Phase 4 — Deployment Lineage (recommended next).** No `Customer` or
-`Application`/`Product` table exists. Phase 3 deliberately built
-`Deployment ↔ GitHubRepository` as a real many-to-many
-(`app/integrations/github/models.py`'s `DeploymentGitHubRepository`) so
-Phase 4 has a correct edge to extend upward from — do not migrate that
-relationship away, build `Application` on top of it. See
-`docs/architecture/target-state.md`'s diagram for where `VERSION`/
-`RELEASE` need to connect to an actually-deployed commit (not done yet —
-`GitHubRelease`/`GitHubCommit` exist but nothing links a release to "this
-is what's currently running on deployment X").
-
-**Phase 5 — CI/CD integration (recommended after Phase 4).**
-`GitHubWebhookEvent` already persists `workflow_run`/`check_run`
-deliveries today (any event type without a handler in `webhooks.py`
-still gets a row — check `github_webhook_events` table for real
-historical data to backfill from once handlers exist). Reuse the Phase 3
-package shape exactly.
+**Phase 5 — CI/CD integration (recommended next).** `GitHubWebhookEvent`
+already persists `workflow_run`/`check_run` deliveries today (any event
+type without a handler in `webhooks.py` still gets a row — check
+`github_webhook_events` table for real historical data to backfill from
+once handlers exist). Reuse the Phase 3 package shape exactly. Also the
+natural place to start populating `DeploymentRelease.source=
+github_actions`/`ci_cd` (Phase 4 already defined the enum values and the
+table shape for this — see ADR-004 decision 5 and its "Consequences"
+section — don't re-design the lineage table, just insert rows into it
+from the new webhook handler).
 
 **Phase 6 — Support ↔ Engineering link.** Ticket → GitHub issue → PR →
 release → deployment. Nothing wired yet; `SupportTicket` has no FK/

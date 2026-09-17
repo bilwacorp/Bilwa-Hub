@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutGrid, Ticket, CalendarClock, LogOut, Users, Bell, Menu, X, ShieldCheck, CheckSquare, Workflow, History, Github } from 'lucide-react'
+import { LayoutGrid, Ticket, CalendarClock, LogOut, Users, Bell, Menu, X, ShieldCheck, CheckSquare, Workflow, History, Github, Building2, Package } from 'lucide-react'
 import { useAuthStore } from './stores/auth'
 import api from './lib/api'
 import { cn } from './lib/utils'
@@ -23,6 +23,8 @@ import WorkflowDesignerPage from './pages/workflows/WorkflowDesignerPage'
 import ApprovalRulesPage from './pages/workflows/ApprovalRulesPage'
 import EventsPage from './pages/events/EventsPage'
 import GitHubPage from './pages/github/GitHubPage'
+import CustomersPage from './pages/customers/CustomersPage'
+import ApplicationsPage from './pages/applications/ApplicationsPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -50,6 +52,8 @@ function RequirePermission({ permission, children }: { permission: string; child
 
 const NAV_ITEMS = [
   { to: '/deployments', label: 'Deployments', icon: LayoutGrid, permission: 'deployments.view' },
+  { to: '/customers', label: 'Customers', icon: Building2, permission: 'customers.view' },
+  { to: '/applications', label: 'Applications', icon: Package, permission: 'applications.view' },
   { to: '/tickets', label: 'Support Tickets', icon: Ticket, permission: 'tickets.view' },
   { to: '/maintenance-windows', label: 'Maintenance', icon: CalendarClock, permission: 'maintenance.view' },
   { to: '/notifications', label: 'Notifications', icon: Bell, permission: 'notifications.view' },
@@ -188,6 +192,8 @@ export default function App() {
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/deployments" element={<RequireAuth><RequirePermission permission="deployments.view"><Shell><DeploymentsListPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/deployments/:deploymentId" element={<RequireAuth><RequirePermission permission="deployments.view"><Shell><DeploymentDetailPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/customers" element={<RequireAuth><RequirePermission permission="customers.view"><Shell><CustomersPage /></Shell></RequirePermission></RequireAuth>} />
+      <Route path="/applications" element={<RequireAuth><RequirePermission permission="applications.view"><Shell><ApplicationsPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/tickets" element={<RequireAuth><RequirePermission permission="tickets.view"><Shell><SupportTicketsPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/maintenance-windows" element={<RequireAuth><RequirePermission permission="maintenance.view"><Shell><MaintenanceWindowsPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/notifications" element={<RequireAuth><RequirePermission permission="notifications.view"><Shell><NotificationsPage /></Shell></RequirePermission></RequireAuth>} />

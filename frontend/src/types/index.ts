@@ -1,6 +1,41 @@
 export type DeploymentStatus = 'pending' | 'active' | 'suspended'
 export type SupportTicketStatus = 'open' | 'in_progress' | 'resolved' | 'closed'
 export type MaintenanceWindowStatus = 'planned' | 'in_progress' | 'completed' | 'cancelled'
+export type DeploymentEnvironment = 'production' | 'staging' | 'development' | 'uat'
+export type DeploymentReleaseSource = 'manual' | 'heartbeat_inferred' | 'github_actions' | 'ci_cd'
+
+// HUB-Expansion.md Phase 4 — deployment lineage.
+export interface Customer {
+  id: string
+  name: string
+  slug: string
+  notes: string | null
+  created_at: string
+}
+
+export interface Application {
+  id: string
+  name: string
+  slug: string
+  description: string | null
+  created_at: string
+}
+
+export interface DeploymentRelease {
+  id: string
+  deployment_id: string
+  version: string | null
+  repository_id: string | null
+  release_id: string | null
+  commit_sha: string | null
+  source: DeploymentReleaseSource
+  deployed_by: string | null
+  deployed_at: string
+  notes: string | null
+  created_at: string
+  repository_full_name: string | null
+  release_tag_name: string | null
+}
 
 export interface PendingRequest {
   id: string
@@ -54,6 +89,13 @@ export interface Deployment {
   // notified about its tickets/subscription requests (see backend's
   // services/notifications/recipients.py).
   assigned_staff: StaffOption[]
+  // HUB-Expansion.md Phase 4 lineage.
+  environment: DeploymentEnvironment
+  customer_id: string | null
+  application_id: string | null
+  customer: Customer | null
+  application: Application | null
+  current_release: DeploymentRelease | null
 }
 
 export interface DeploymentListResponse {

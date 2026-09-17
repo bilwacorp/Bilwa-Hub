@@ -18,17 +18,19 @@ from app.core import event_types as et
 from app.core.config import settings
 from app.core.permissions import (
     ACTIONS_RETRY, DEPLOYMENTS_ASSIGN_STAFF, DEPLOYMENTS_CHANGE_PLAN, DEPLOYMENTS_CHECK_HEALTH, DEPLOYMENTS_CREATE,
-    DEPLOYMENTS_EXTEND_EXPIRY, DEPLOYMENTS_RENEW, DEPLOYMENTS_REVIEW_REQUEST, DEPLOYMENTS_SUSPEND,
-    DEPLOYMENTS_VIEW, DEPLOYMENTS_VIEW_ALL, has_permission, require_permission,
+    DEPLOYMENTS_EXTEND_EXPIRY, DEPLOYMENTS_MANAGE_LINEAGE, DEPLOYMENTS_RENEW, DEPLOYMENTS_REVIEW_REQUEST,
+    DEPLOYMENTS_SUSPEND, DEPLOYMENTS_VIEW, DEPLOYMENTS_VIEW_ALL, has_permission, require_permission,
 )
 from app.db.session import get_db
 from app.models import (
-    Deployment, DeploymentActionAttempt, DeploymentActionExecution, DeploymentSnapshot, DeploymentStaffAssignment,
-    DeploymentStatus, MaintenanceWindow, OperationalEventStatus, User,
+    Application, Customer, Deployment, DeploymentActionAttempt, DeploymentActionExecution, DeploymentRelease,
+    DeploymentReleaseSource, DeploymentSnapshot, DeploymentStaffAssignment, DeploymentStatus, MaintenanceWindow,
+    OperationalEventStatus, User,
 )
 from app.schemas import (
-    ChangePlanActionRequest, DeploymentActionAttemptOut, DeploymentActionExecutionOut, DeploymentCreate,
-    DeploymentCreateOut, DeploymentListResponse, DeploymentOut, DeploymentSnapshotOut, DeploymentStaffAssignRequest,
+    ApplicationOut, ChangePlanActionRequest, CustomerOut, DeploymentActionAttemptOut, DeploymentActionExecutionOut,
+    DeploymentCreate, DeploymentCreateOut, DeploymentLineageUpdate, DeploymentListResponse, DeploymentOut,
+    DeploymentReleaseCreate, DeploymentReleaseOut, DeploymentSnapshotOut, DeploymentStaffAssignRequest,
     ExtendExpiryActionRequest, ReissueTokenOut, RenewActionRequest, StaffOptionOut, SubscriptionRequestReviewAction,
     SuspendActionRequest,
 )
@@ -42,6 +44,7 @@ from app.integrations.github.schemas import (
 from app.services import deployment_client
 from app.services.deployment_scope import assigned_deployment_ids
 from app.services.events import record_event
+from app.services.lineage import applications_map, current_releases_map, customers_map
 from app.services.maintenance_query import currently_active_windows
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
@@ -90,8 +93,27 @@ def _derive_status(d, snap, active_windows: list[MaintenanceWindow]):
     return age, "online"
 
 
+async def _release_out(db: AsyncSession, release: DeploymentRelease) -> DeploymentReleaseOut:
+    """Fills repository_full_name/release_tag_name from a join — see
+    DeploymentReleaseOut's docstring for why these aren't plain
+    model_validate(release) fields."""
+    out = DeploymentReleaseOut.model_validate(release)
+    if release.repository_id is not None:
+        repo = (await db.execute(
+            select(GitHubRepository.full_name).where(GitHubRepository.id == release.repository_id)
+        )).scalar_one_or_none()
+        out.repository_full_name = repo
+    if release.release_id is not None:
+        tag = (await db.execute(
+            select(GitHubRelease.tag_name).where(GitHubRelease.id == release.release_id)
+        )).scalar_one_or_none()
+        out.release_tag_name = tag
+    return out
+
+
 async def _to_out(
     db: AsyncSession, d: Deployment, active_windows: list[MaintenanceWindow], assigned_staff_map: dict | None = None,
+    customer_map: dict | None = None, application_map: dict | None = None, release_map: dict | None = None,
 ) -> DeploymentOut:
     snap = await _latest_snapshot(db, d.id)
     out = DeploymentOut.model_validate(d)
@@ -99,6 +121,15 @@ async def _to_out(
     out.heartbeat_age_seconds, out.derived_status = _derive_status(d, snap, active_windows)
     if assigned_staff_map is not None:
         out.assigned_staff = assigned_staff_map.get(d.id, [])
+    if customer_map is not None and d.customer_id is not None:
+        customer = customer_map.get(d.customer_id)
+        out.customer = CustomerOut.model_validate(customer) if customer else None
+    if application_map is not None and d.application_id is not None:
+        application = application_map.get(d.application_id)
+        out.application = ApplicationOut.model_validate(application) if application else None
+    if release_map is not None:
+        release = release_map.get(d.id)
+        out.current_release = await _release_out(db, release) if release else None
     return out
 
 
@@ -190,7 +221,13 @@ async def list_deployments(
     )).scalars().all()
     active_windows = await currently_active_windows(db)
     assigned_staff_map = await _assigned_staff_map(db, [d.id for d in rows])
-    return DeploymentListResponse(total=total, items=[await _to_out(db, d, active_windows, assigned_staff_map) for d in rows])
+    customer_map = await customers_map(db, [d.customer_id for d in rows])
+    application_map = await applications_map(db, [d.application_id for d in rows])
+    release_map = await current_releases_map(db, [d.id for d in rows])
+    return DeploymentListResponse(total=total, items=[
+        await _to_out(db, d, active_windows, assigned_staff_map, customer_map, application_map, release_map)
+        for d in rows
+    ])
 
 
 @router.get("/{deployment_id}", response_model=DeploymentOut)
@@ -200,7 +237,12 @@ async def get_deployment(
 ):
     d = await _get_visible_or_404(db, deployment_id, current_user)
     assigned_staff_map = await _assigned_staff_map(db, [d.id])
-    return await _to_out(db, d, await currently_active_windows(db), assigned_staff_map)
+    customer_map = await customers_map(db, [d.customer_id])
+    application_map = await applications_map(db, [d.application_id])
+    release_map = await current_releases_map(db, [d.id])
+    return await _to_out(
+        db, d, await currently_active_windows(db), assigned_staff_map, customer_map, application_map, release_map,
+    )
 
 
 @router.put("/{deployment_id}/staff", response_model=list[StaffOptionOut])
@@ -475,3 +517,97 @@ async def get_deployment_github_info(
         latest_pull_request=GitHubPullRequestOut.model_validate(latest_pr) if latest_pr else None,
         latest_release=GitHubReleaseOut.model_validate(latest_release) if latest_release else None,
     )
+
+
+# ── lineage (HUB-Expansion.md Phase 4 — see app/models.py's Customer/
+# Application/DeploymentRelease and app/services/lineage.py) ──────────────
+
+@router.patch("/{deployment_id}/lineage", response_model=DeploymentOut)
+async def update_deployment_lineage(
+    deployment_id: str, body: DeploymentLineageUpdate, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_MANAGE_LINEAGE)),
+):
+    """Sets which Customer/Application this deployment belongs to and/or
+    its Environment. Every field is optional (see DeploymentLineageUpdate's
+    docstring) — only the fields present in the request body are touched."""
+    d = await _get_visible_or_404(db, deployment_id, current_user)
+    body_fields = body.model_dump(exclude_unset=True)
+
+    if "customer_id" in body_fields:
+        if body.customer_id is not None:
+            exists = (await db.execute(select(Customer.id).where(Customer.id == body.customer_id))).scalar_one_or_none()
+            if exists is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown customer_id")
+        d.customer_id = body.customer_id
+    if "application_id" in body_fields:
+        if body.application_id is not None:
+            exists = (await db.execute(select(Application.id).where(Application.id == body.application_id))).scalar_one_or_none()
+            if exists is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown application_id")
+        d.application_id = body.application_id
+    if body.environment is not None:
+        d.environment = body.environment
+
+    await db.flush()
+    record_event(
+        db, event_type=et.DEPLOYMENT_LINEAGE_UPDATED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF,
+        actor_id=current_user.id, entity_type=et.ENTITY_DEPLOYMENT, entity_id=d.id, deployment_id=d.id,
+        metadata={k: (str(v) if v is not None else None) for k, v in body_fields.items()},
+    )
+
+    assigned_staff_map = await _assigned_staff_map(db, [d.id])
+    customer_map = await customers_map(db, [d.customer_id])
+    application_map = await applications_map(db, [d.application_id])
+    release_map = await current_releases_map(db, [d.id])
+    return await _to_out(
+        db, d, await currently_active_windows(db), assigned_staff_map, customer_map, application_map, release_map,
+    )
+
+
+@router.get("/{deployment_id}/releases", response_model=list[DeploymentReleaseOut])
+async def list_deployment_releases(
+    deployment_id: str, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_VIEW)),
+):
+    d = await _get_visible_or_404(db, deployment_id, current_user)
+    rows = (await db.execute(
+        select(DeploymentRelease).where(DeploymentRelease.deployment_id == d.id)
+        .order_by(DeploymentRelease.deployed_at.desc())
+    )).scalars().all()
+    return [await _release_out(db, r) for r in rows]
+
+
+@router.post("/{deployment_id}/releases", response_model=DeploymentReleaseOut, status_code=201)
+async def record_deployment_release(
+    deployment_id: str, body: DeploymentReleaseCreate, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*DEPLOYMENTS_MANAGE_LINEAGE)),
+):
+    """Manual lineage entry/correction — source is always 'manual' here;
+    'heartbeat_inferred' only ever comes from services/lineage.py's
+    infer_release_from_heartbeat, and 'github_actions'/'ci_cd' aren't
+    reachable until HUB-Expansion.md Phase 5's CI/CD webhook lands."""
+    d = await _get_visible_or_404(db, deployment_id, current_user)
+    if body.repository_id is not None:
+        exists = (await db.execute(select(GitHubRepository.id).where(GitHubRepository.id == body.repository_id))).scalar_one_or_none()
+        if exists is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown repository_id")
+    if body.release_id is not None:
+        exists = (await db.execute(select(GitHubRelease.id).where(GitHubRelease.id == body.release_id))).scalar_one_or_none()
+        if exists is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown release_id")
+
+    release = DeploymentRelease(
+        deployment_id=d.id, version=body.version, repository_id=body.repository_id, release_id=body.release_id,
+        commit_sha=body.commit_sha, source=DeploymentReleaseSource.manual,
+        deployed_by=body.deployed_by or current_user.username, deployed_at=body.deployed_at or datetime.utcnow(),
+        notes=body.notes,
+    )
+    db.add(release)
+    await db.flush()
+    await db.refresh(release)
+    record_event(
+        db, event_type=et.DEPLOYMENT_RELEASE_RECORDED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF,
+        actor_id=current_user.id, entity_type=et.ENTITY_DEPLOYMENT_RELEASE, entity_id=release.id, deployment_id=d.id,
+        metadata={"version": release.version, "source": "manual"},
+    )
+    return await _release_out(db, release)

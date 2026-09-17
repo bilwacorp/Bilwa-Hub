@@ -42,6 +42,9 @@ ENTITY_GITHUB_ISSUE = "github_issue"
 ENTITY_GITHUB_RELEASE = "github_release"
 ENTITY_GITHUB_COMMIT = "github_commit"
 ENTITY_GITHUB_WEBHOOK_EVENT = "github_webhook_event"
+ENTITY_CUSTOMER = "customer"
+ENTITY_APPLICATION = "application"
+ENTITY_DEPLOYMENT_RELEASE = "deployment_release"
 
 # ── deployment lifecycle ──────────────────────────────────────────────────
 DEPLOYMENT_REGISTERED = "deployment.registered"
@@ -113,3 +116,12 @@ GITHUB_COMMIT_PUSHED = "github.commit.pushed"
 GITHUB_RELEASE_PUBLISHED = "github.release.published"
 GITHUB_REPOSITORY_SYNCED = "github.repository_synced"
 GITHUB_REPOSITORY_SYNC_FAILED = "github.repository_sync_failed"
+
+# ── deployment lineage (HUB-Expansion.md Phase 4 — see app/models.py's
+# Customer/Application/DeploymentRelease and app/services/lineage.py) ─────
+CUSTOMER_CREATED = "customer.created"
+CUSTOMER_UPDATED = "customer.updated"
+APPLICATION_CREATED = "application.created"
+APPLICATION_UPDATED = "application.updated"
+DEPLOYMENT_LINEAGE_UPDATED = "deployment.lineage_updated"
+DEPLOYMENT_RELEASE_RECORDED = "deployment.release_recorded"

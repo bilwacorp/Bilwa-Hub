@@ -16,6 +16,7 @@ from app.schemas import (
     HeartbeatRequest, HeartbeatResponse, MaintenanceWindowPublic, SupportTicketIngest,
 )
 from app.services.events import record_event
+from app.services.lineage import infer_release_from_heartbeat
 from app.services.maintenance_query import active_windows_for
 from app.services.notification_triggers import (
     new_pending_requests, notify_subscription_request_raised, notify_support_ticket_raised,
@@ -62,6 +63,7 @@ async def ingest_heartbeat(
         metadata={"app_version": body.app_version},
     )
     await db.flush()
+    await infer_release_from_heartbeat(db, deployment, body.app_version, snapshot.received_at)
 
     for request in new_pending_requests(previous, body.pending_requests):
         await notify_subscription_request_raised(db, request, deployment)

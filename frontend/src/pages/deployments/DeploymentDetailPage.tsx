@@ -9,9 +9,13 @@ import { formatDate, errorMessage as errMsg } from '../../lib/utils'
 import { useAuthStore } from '../../stores/auth'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
+import { Select } from '../../components/ui/Select'
 import { Modal } from '../../components/ui/Modal'
 import { Badge } from '../../components/ui/Badge'
-import type { Deployment, DeploymentActionExecution, DeploymentGitHubInfo, StaffOption } from '../../types'
+import type {
+  Application, Customer, Deployment, DeploymentActionExecution, DeploymentEnvironment, DeploymentGitHubInfo,
+  StaffOption,
+} from '../../types'
 
 // Money actions (renew/suspend/change-plan) run immediately, unless a
 // published approval workflow is configured for that action (see backend's
@@ -183,6 +187,46 @@ export default function DeploymentDetailPage() {
     queryFn: () => api.get<DeploymentGitHubInfo>(`/deployments/${deploymentId}/github`).then((r) => r.data),
   })
 
+  // HUB-Expansion.md Phase 4 — lineage (Customer/Application/Environment/
+  // current release). Edit affordances are gated by deployments.manage_lineage,
+  // which is a separate permission from deployments.view.
+  const canManageLineage = can('deployments.manage_lineage')
+  const { data: customers } = useQuery({
+    queryKey: ['customers'], queryFn: () => api.get<Customer[]>('/customers').then((r) => r.data),
+    enabled: canManageLineage,
+  })
+  const { data: applications } = useQuery({
+    queryKey: ['applications'], queryFn: () => api.get<Application[]>('/applications').then((r) => r.data),
+    enabled: canManageLineage,
+  })
+  const [showLineageEdit, setShowLineageEdit] = useState(false)
+  const lineageForm = useForm<{ customer_id: string; application_id: string; environment: DeploymentEnvironment }>()
+  const lineageMutation = useMutation({
+    mutationFn: (v: { customer_id: string; application_id: string; environment: DeploymentEnvironment }) =>
+      api.patch(`/deployments/${deploymentId}/lineage`, {
+        customer_id: v.customer_id || null, application_id: v.application_id || null, environment: v.environment,
+      }),
+    onSuccess: () => { toast.success('Lineage updated'); setShowLineageEdit(false); invalidate() },
+    onError: (e) => toast.error(errMsg(e, 'Failed to update lineage')),
+  })
+  const openLineageEdit = () => {
+    lineageForm.reset({
+      customer_id: d?.customer_id ?? '', application_id: d?.application_id ?? '', environment: d?.environment ?? 'production',
+    })
+    setShowLineageEdit(true)
+  }
+
+  const [showRecordRelease, setShowRecordRelease] = useState(false)
+  const recordReleaseForm = useForm<{ version: string; commit_sha: string; deployed_by: string; notes: string }>()
+  const recordReleaseMutation = useMutation({
+    mutationFn: (v: { version: string; commit_sha: string; deployed_by: string; notes: string }) =>
+      api.post(`/deployments/${deploymentId}/releases`, {
+        version: v.version || null, commit_sha: v.commit_sha || null, deployed_by: v.deployed_by || null, notes: v.notes || null,
+      }),
+    onSuccess: () => { toast.success('Release recorded'); setShowRecordRelease(false); recordReleaseForm.reset(); invalidate() },
+    onError: (e) => toast.error(errMsg(e, 'Failed to record release')),
+  })
+
   if (!d) return <div className="p-6 text-muted">Loading…</div>
 
   const snap = d.latest_snapshot
@@ -192,6 +236,56 @@ export default function DeploymentDetailPage() {
       <div>
         <h1 className="text-xl font-semibold text-text">{d.client_name}</h1>
         <p className="text-sm text-muted font-mono">{d.slug} · {d.base_url ?? 'not yet registered'}</p>
+      </div>
+
+      {/* HUB-Expansion.md Phase 4 — lineage: Customer/Application/
+          Environment/current version+release+commit+repository. */}
+      <div className="bg-surface border border-border rounded-lg p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-text">Lineage</h3>
+          <div className="flex gap-2">
+            {canManageLineage && <Button size="sm" variant="ghost" onClick={() => setShowRecordRelease(true)}>Record Release</Button>}
+            {canManageLineage && <Button size="sm" variant="secondary" onClick={openLineageEdit}>Edit</Button>}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-3 text-sm">
+          <div>
+            <div className="text-xs text-muted mb-0.5">Customer</div>
+            <div className="font-medium">{d.customer?.name ?? '—'}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted mb-0.5">Application</div>
+            <div className="font-medium">{d.application?.name ?? '—'}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted mb-0.5">Environment</div>
+            <Badge variant={d.environment === 'production' ? 'blue' : 'gray'} className="capitalize">{d.environment}</Badge>
+          </div>
+          <div>
+            <div className="text-xs text-muted mb-0.5">Current version</div>
+            <div className="font-medium">{snap?.app_version ?? d.current_release?.version ?? '—'}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted mb-0.5">Release</div>
+            <div className="font-mono text-xs font-medium">{d.current_release?.release_tag_name ?? '—'}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted mb-0.5">Commit</div>
+            <div className="font-mono text-xs font-medium">{d.current_release?.commit_sha ? d.current_release.commit_sha.slice(0, 7) : '—'}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted mb-0.5">Repository</div>
+            <div className="font-mono text-xs font-medium">{d.current_release?.repository_full_name ?? '—'}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted mb-0.5">Deployed</div>
+            <div className="font-medium">{d.current_release ? formatDate(d.current_release.deployed_at) : '—'}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted mb-0.5">Deployed by</div>
+            <div className="font-medium">{d.current_release?.deployed_by ?? '—'}</div>
+          </div>
+        </div>
       </div>
 
       {canAssignStaff ? (
@@ -435,6 +529,41 @@ export default function DeploymentDetailPage() {
       <Modal open={showExtend} onClose={() => setShowExtend(false)} title="Extend Expiry" size="sm"
         footer={<><Button variant="secondary" onClick={() => setShowExtend(false)}>Cancel</Button><Button loading={extendMutation.isPending} onClick={extendForm.handleSubmit((v) => extendMutation.mutate(v))}>Extend</Button></>}>
         <Input type="date" label="New expiry date" {...extendForm.register('new_expiry_date', { required: true })} />
+      </Modal>
+
+      <Modal open={showLineageEdit} onClose={() => setShowLineageEdit(false)} title="Edit Lineage" size="sm"
+        footer={<><Button variant="secondary" onClick={() => setShowLineageEdit(false)}>Cancel</Button><Button loading={lineageMutation.isPending} onClick={lineageForm.handleSubmit((v) => lineageMutation.mutate(v))}>Save</Button></>}>
+        <form className="space-y-4">
+          <Select
+            label="Customer" placeholder="Unlinked"
+            options={(customers ?? []).map((c: Customer) => ({ value: c.id, label: c.name }))}
+            {...lineageForm.register('customer_id')}
+          />
+          <Select
+            label="Application" placeholder="Unlinked"
+            options={(applications ?? []).map((a: Application) => ({ value: a.id, label: a.name }))}
+            {...lineageForm.register('application_id')}
+          />
+          <Select
+            label="Environment"
+            options={(['production', 'staging', 'development', 'uat'] as DeploymentEnvironment[]).map((e) => ({ value: e, label: e }))}
+            {...lineageForm.register('environment')}
+          />
+        </form>
+      </Modal>
+
+      <Modal open={showRecordRelease} onClose={() => setShowRecordRelease(false)} title="Record Release" size="sm"
+        footer={<><Button variant="secondary" onClick={() => setShowRecordRelease(false)}>Cancel</Button><Button loading={recordReleaseMutation.isPending} onClick={recordReleaseForm.handleSubmit((v) => recordReleaseMutation.mutate(v))}>Record</Button></>}>
+        <form className="space-y-4">
+          <Input label="Version" placeholder="e.g. 2.8.15" {...recordReleaseForm.register('version')} />
+          <Input label="Commit SHA (optional)" placeholder="e.g. 83ad92f..." {...recordReleaseForm.register('commit_sha')} />
+          <Input label="Deployed by (optional)" placeholder="e.g. GitHub Actions" {...recordReleaseForm.register('deployed_by')} />
+          <Input label="Notes (optional)" {...recordReleaseForm.register('notes')} />
+          <p className="text-xs text-muted">
+            Manual entry — a heartbeat reporting a new version already records this automatically when it matches a
+            linked GitHub release; use this to backfill or correct history.
+          </p>
+        </form>
       </Modal>
     </div>
   )

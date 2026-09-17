@@ -61,6 +61,7 @@ DEPLOYMENTS_EXTEND_EXPIRY = ("deployments", "extend_expiry")
 DEPLOYMENTS_CHECK_HEALTH = ("deployments", "check_health")
 DEPLOYMENTS_REVIEW_REQUEST = ("deployments", "review_request")
 DEPLOYMENTS_ASSIGN_STAFF = ("deployments", "assign_staff")
+DEPLOYMENTS_MANAGE_LINEAGE = ("deployments", "manage_lineage")
 
 # ── tickets ───────────────────────────────────────────────────────────────
 TICKETS_VIEW = ("tickets", "view")
@@ -141,6 +142,14 @@ GITHUB_MANAGE = ("github", "manage")                    # create/edit an integra
 GITHUB_TEST_CONNECTION = ("github", "test_connection")   # diagnostic — same tier as deployments.check_health
 GITHUB_SYNC = ("github", "sync")                         # trigger a repository sync
 
+# ── customers / applications (HUB-Expansion.md Phase 4 — see
+# app/models.py's Customer/Application). Not row-scoped — small,
+# fleet-wide reference data, same tier as the GitHub catalog above. ────────
+CUSTOMERS_VIEW = ("customers", "view")
+CUSTOMERS_MANAGE = ("customers", "manage")
+APPLICATIONS_VIEW = ("applications", "view")
+APPLICATIONS_MANAGE = ("applications", "manage")
+
 # (resource, action, description) — the migration-seeded catalog. Order
 # here is also the order the admin UI's checkbox grid renders in within
 # each resource's group.
@@ -155,6 +164,7 @@ ALL_PERMISSIONS: list[tuple[str, str, str]] = [
     (*DEPLOYMENTS_CHECK_HEALTH, "Run an on-demand live health check against a deployment"),
     (*DEPLOYMENTS_REVIEW_REQUEST, "Approve or reject a deployment's renewal/upgrade request"),
     (*DEPLOYMENTS_ASSIGN_STAFF, "Assign staff to a deployment"),
+    (*DEPLOYMENTS_MANAGE_LINEAGE, "Set a deployment's customer/application/environment and record its current release"),
     (*TICKETS_VIEW, "View support tickets from deployments assigned to you"),
     (*TICKETS_VIEW_ALL, "View support tickets from every deployment"),
     (*TICKETS_UPDATE_STATUS, "Update a support ticket's status"),
@@ -197,6 +207,10 @@ ALL_PERMISSIONS: list[tuple[str, str, str]] = [
     (*GITHUB_MANAGE, "Create/edit a GitHub integration's credentials"),
     (*GITHUB_TEST_CONNECTION, "Test a GitHub integration's stored credentials"),
     (*GITHUB_SYNC, "Trigger a GitHub repository sync"),
+    (*CUSTOMERS_VIEW, "View the customer directory"),
+    (*CUSTOMERS_MANAGE, "Create/edit customers"),
+    (*APPLICATIONS_VIEW, "View the application catalog"),
+    (*APPLICATIONS_MANAGE, "Create/edit applications"),
 ]
 
 
