@@ -24,7 +24,7 @@ async def active_windows_for(db: AsyncSession, deployment_id: Optional[UUID]) ->
         select(MaintenanceWindow).where(
             scope,
             MaintenanceWindow.status.in_(
-                [MaintenanceWindowStatus.planned, MaintenanceWindowStatus.in_progress]
+                [MaintenanceWindowStatus.planned, MaintenanceWindowStatus.notification, MaintenanceWindowStatus.in_progress]
             ),
             MaintenanceWindow.scheduled_end >= now,
         ).order_by(MaintenanceWindow.scheduled_start)
@@ -40,7 +40,7 @@ async def currently_active_windows(db: AsyncSession) -> list[MaintenanceWindow]:
     rows = (await db.execute(
         select(MaintenanceWindow).where(
             MaintenanceWindow.status.in_(
-                [MaintenanceWindowStatus.planned, MaintenanceWindowStatus.in_progress]
+                [MaintenanceWindowStatus.planned, MaintenanceWindowStatus.notification, MaintenanceWindowStatus.in_progress]
             ),
             MaintenanceWindow.scheduled_start <= now,
             MaintenanceWindow.scheduled_end >= now,

@@ -401,9 +401,48 @@ class SupportTicketLink(Base):
 
 
 class MaintenanceWindowStatus(str, enum.Enum):
+    """HUB-Expansion.md Phase 7 widened this from four values to nine.
+    `planned`/`in_progress` are NOT renamed to the phase's own
+    "scheduled"/"active" vocabulary — see
+    docs/adr/ADR-007-maintenance-lifecycle-and-approvals.md decision 1 for
+    why keeping the original member names (while treating them as
+    synonyms in every user-facing label) is the correct reading of "existing
+    behavior must remain compatible" versus a literal rename.
+
+    draft              — being authored; never pushed to any deployment,
+                          never touched by the scheduler.
+    approval_required  — submitted, but this window is "high risk" (see
+                          app/approvals/maintenance_hooks.py's
+                          _is_high_risk) and an active/published
+                          maintenance_window_approval workflow exists.
+    approved           — approval completed; the very next scheduler tick
+                          promotes this straight to `planned` (see
+                          core/maintenance_scheduler.py's _auto_transition)
+                          — there's no additional condition to wait on.
+    planned            — "scheduled": will auto-activate at scheduled_start.
+    notification       — planned, AND the advance-notice push to its
+                          target(s) has gone out (see services/
+                          maintenance_push.py's sync_window). Purely
+                          informational — treated identically to `planned`
+                          everywhere else (push-pending queries, the
+                          to_start/expired scheduler queries).
+    in_progress        — "active": currently within its scheduled window.
+    completed          — ended normally (by clock, or manually via PATCH).
+    failed             — ended badly; a MANUAL terminal status only (see
+                          the ADR's decision on why this codebase has no
+                          live signal to auto-detect a maintenance failure
+                          from, unlike DeploymentActionExecution's real
+                          HTTP call outcome).
+    cancelled          — pre-existing; unchanged.
+    """
+    draft = "draft"
+    approval_required = "approval_required"
+    approved = "approved"
     planned = "planned"
+    notification = "notification"
     in_progress = "in_progress"
     completed = "completed"
+    failed = "failed"
     cancelled = "cancelled"
 
 
@@ -440,6 +479,10 @@ class MaintenanceWindow(Base):
     push_state: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    # HUB-Expansion.md Phase 7 additions.
+    expected_impact: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    actual_impact: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
 
     deployment: Mapped[Optional["Deployment"]] = relationship("Deployment")
 

@@ -151,6 +151,20 @@ CUSTOMERS_MANAGE = ("customers", "manage")
 APPLICATIONS_VIEW = ("applications", "view")
 APPLICATIONS_MANAGE = ("applications", "manage")
 
+# ── dashboard (HUB-Expansion.md Phase 10) — one coarse permission for the
+# whole aggregated view, row-scoped exactly like deployments.py wherever
+# it counts per-deployment things; sub-sections needing a permission the
+# caller lacks (e.g. approvals.view for the Approvals section) degrade to
+# zeroed-out rather than 403ing the whole page — see services/dashboard.py.
+DASHBOARD_VIEW = ("dashboard", "view")
+
+# ── integration center (HUB-Expansion.md Phase 11) — read-only rollup
+# over GitHub/CI-CD/email/WhatsApp/Monitoring health; never exposes a
+# secret itself (see api/routers/integrations.py) — GITHUB_MANAGE/
+# NOTIFICATIONS_TEST_SEND still gate the actual "test connection"
+# actions each card's button calls.
+INTEGRATIONS_VIEW = ("integrations", "view")
+
 # (resource, action, description) — the migration-seeded catalog. Order
 # here is also the order the admin UI's checkbox grid renders in within
 # each resource's group.
@@ -213,6 +227,8 @@ ALL_PERMISSIONS: list[tuple[str, str, str]] = [
     (*CUSTOMERS_MANAGE, "Create/edit customers"),
     (*APPLICATIONS_VIEW, "View the application catalog"),
     (*APPLICATIONS_MANAGE, "Create/edit applications"),
+    (*DASHBOARD_VIEW, "View the operations dashboard"),
+    (*INTEGRATIONS_VIEW, "View the integration center (GitHub/CI-CD/email/WhatsApp/monitoring health)"),
 ]
 
 

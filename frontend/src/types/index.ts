@@ -1,6 +1,8 @@
 export type DeploymentStatus = 'pending' | 'active' | 'suspended'
 export type SupportTicketStatus = 'open' | 'in_progress' | 'resolved' | 'closed'
-export type MaintenanceWindowStatus = 'planned' | 'in_progress' | 'completed' | 'cancelled'
+export type MaintenanceWindowStatus =
+  | 'draft' | 'approval_required' | 'approved' | 'planned' | 'notification' | 'in_progress' | 'completed'
+  | 'failed' | 'cancelled'
 export type DeploymentEnvironment = 'production' | 'staging' | 'development' | 'uat'
 export type DeploymentReleaseSource = 'manual' | 'heartbeat_inferred' | 'github_actions' | 'ci_cd'
 
@@ -158,6 +160,10 @@ export interface MaintenanceWindow {
   description: string
   status: MaintenanceWindowStatus
   mode: MaintenanceMode
+  expected_impact: string | null
+  actual_impact: string | null
+  approved_by: string | null
+  created_by: string | null
   created_at: string
 }
 
@@ -533,4 +539,96 @@ export interface DeploymentGitHubInfo {
   latest_commit: GitHubCommit | null
   latest_pull_request: GitHubPullRequest | null
   latest_release: GitHubRelease | null
+}
+
+// ── operations dashboard (HUB-Expansion.md Phase 10) ──────────────────────
+
+export interface DashboardFleetSummary {
+  total: number
+  healthy: number
+  warning: number
+  offline: number
+  unknown: number
+  under_maintenance: number
+}
+
+export interface DashboardReleaseItem {
+  deployment_id: string
+  client_name: string
+  version: string | null
+  deployed_at: string
+}
+
+export interface DashboardFailedActionItem {
+  deployment_id: string
+  client_name: string
+  action_key: string
+  last_error: string | null
+  last_attempted_at: string | null
+}
+
+export interface DashboardDeploymentsSummary {
+  recently_deployed: DashboardReleaseItem[]
+  recently_failed: DashboardFailedActionItem[]
+  outdated_versions: number
+  missing_heartbeat: number
+  high_risk: number
+}
+
+export interface DashboardSupportSummary {
+  open: number
+  unassigned: number
+  escalated: number
+  awaiting_engineering: number
+}
+
+export interface DashboardMaintenanceSummary {
+  upcoming: number
+  active: number
+  failed: number
+}
+
+export interface DashboardApprovalsSummary {
+  pending: number
+  overdue: number
+  recently_approved: number
+  recently_rejected: number
+}
+
+export interface DashboardIntegrationsSummary {
+  github_webhook_failures: number
+  deployment_callback_failures: number
+  notification_failures: number
+}
+
+export interface DashboardAttentionItem {
+  kind: string
+  severity: 'warning' | 'critical'
+  message: string
+  deployment_id: string | null
+}
+
+export interface DashboardOut {
+  fleet: DashboardFleetSummary
+  deployments: DashboardDeploymentsSummary
+  support: DashboardSupportSummary
+  maintenance: DashboardMaintenanceSummary
+  approvals: DashboardApprovalsSummary
+  integrations: DashboardIntegrationsSummary
+  attention: DashboardAttentionItem[]
+}
+
+// ── integration center (HUB-Expansion.md Phase 11) ────────────────────────
+
+export interface IntegrationSummary {
+  key: string
+  name: string
+  status: 'connected' | 'disconnected' | 'error' | 'not_configured'
+  connected: boolean
+  last_sync_at: string | null
+  last_webhook_at: string | null
+  last_error: string | null
+  last_error_at: string | null
+  detail: string | null
+  integration_id: string | null
 }

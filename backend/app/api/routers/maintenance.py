@@ -12,13 +12,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.approvals import maintenance_hooks
 from app.core import event_types as et
 from app.core.permissions import (
     MAINTENANCE_CREATE, MAINTENANCE_DELETE, MAINTENANCE_UPDATE, MAINTENANCE_VIEW, MAINTENANCE_VIEW_ALL,
     has_permission, require_permission,
 )
 from app.db.session import get_db
-from app.models import MaintenanceWindow, MaintenanceWindowStatus, User
+from app.models import MaintenanceWindow, MaintenanceWindowStatus, OperationalEventStatus, User
 from app.schemas import (
     MaintenanceWindowCreate, MaintenanceWindowListResponse, MaintenanceWindowOut, MaintenanceWindowUpdate,
 )
@@ -47,7 +48,8 @@ async def create_window(
     if body.deployment_id is not None and not await has_permission(str(current_user.id), *MAINTENANCE_VIEW_ALL):
         if body.deployment_id not in await assigned_deployment_ids(db, current_user.id):
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Deployment not found")
-    w = MaintenanceWindow(**body.model_dump(), created_by=current_user.id)
+    fields = body.model_dump(exclude={"save_as_draft"})
+    w = MaintenanceWindow(**fields, created_by=current_user.id, status=MaintenanceWindowStatus.draft)
     db.add(w)
     await db.flush()
     await db.refresh(w)
@@ -56,6 +58,28 @@ async def create_window(
         entity_type=et.ENTITY_MAINTENANCE_WINDOW, entity_id=w.id, deployment_id=w.deployment_id,
         metadata={"mode": w.mode, "scheduled_start": w.scheduled_start.isoformat()},
     )
+    if not body.save_as_draft:
+        # HUB-Expansion.md Phase 7/8 — decides planned vs approval_required;
+        # see app/approvals/maintenance_hooks.py. The common case (a plain
+        # single-deployment banner/read_only window) always lands on
+        # `planned` here, same as every window created before this phase.
+        await maintenance_hooks.route_window(db, current_user, w)
+        await sync_window(db, w)
+    return MaintenanceWindowOut.model_validate(w)
+
+
+@router.post("/{window_id}/submit", response_model=MaintenanceWindowOut)
+async def submit_window(
+    window_id: str, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(*MAINTENANCE_CREATE)),
+):
+    """Moves a `draft` window through the same gate-or-schedule decision
+    a non-draft create already goes through — see
+    app/approvals/maintenance_hooks.route_window."""
+    w = await _get_visible_or_404(db, window_id, current_user)
+    if w.status != MaintenanceWindowStatus.draft:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"Only a draft window can be submitted (current status: {w.status.value}).")
+    await maintenance_hooks.route_window(db, current_user, w)
     await sync_window(db, w)
     return MaintenanceWindowOut.model_validate(w)
 
@@ -93,10 +117,21 @@ async def update_window(
     if w.scheduled_start < old_start:
         # Moved earlier — let a fresh reminder fire against the new time.
         clear_reminders(w)
+    # A manual status change to completed/failed gets its own specific
+    # event (mirrors api/routers/tickets.py's update_ticket swapping
+    # TICKET_RESOLVED in for TICKET_UPDATED) — completed/failed usually
+    # arrives here from the scheduler instead (core/maintenance_scheduler
+    # .py), but staff can also mark either by hand (e.g. `failed` has no
+    # automatic trigger at all, see MaintenanceWindowStatus's docstring).
+    new_status = changes.get("status")
+    event_type, event_status = {
+        MaintenanceWindowStatus.completed: (et.MAINTENANCE_COMPLETED, OperationalEventStatus.success),
+        MaintenanceWindowStatus.failed: (et.MAINTENANCE_FAILED, OperationalEventStatus.failure),
+    }.get(new_status, (et.MAINTENANCE_UPDATED, OperationalEventStatus.info))
     record_event(
-        db, event_type=et.MAINTENANCE_UPDATED, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF, actor_id=current_user.id,
+        db, event_type=event_type, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF, actor_id=current_user.id,
         entity_type=et.ENTITY_MAINTENANCE_WINDOW, entity_id=w.id, deployment_id=w.deployment_id,
-        metadata={"changed_fields": list(changes.keys())},
+        status=event_status, metadata={"changed_fields": list(changes.keys())},
     )
     await db.flush()
     # Push the updated list to every affected deployment — a cancelled or

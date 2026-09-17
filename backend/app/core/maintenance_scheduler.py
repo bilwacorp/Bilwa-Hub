@@ -20,22 +20,41 @@ from datetime import datetime
 
 from sqlalchemy import select
 
+from app.core import event_types as et
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
-from app.models import MaintenanceWindow, MaintenanceWindowStatus
+from app.models import MaintenanceWindow, MaintenanceWindowStatus, OperationalEventStatus
+from app.services.events import record_event
 from app.services.maintenance_push import sync_window
 
 logger = logging.getLogger(__name__)
 
 _tasks: list[asyncio.Task] = []
 
+# planned/notification are both "waiting to start" — notification is
+# purely the informational flag "the advance notice already went out"
+# (see services/maintenance_push.py's sync_window), not a different wait
+# condition, so every clock-driven query below treats them identically.
+_SCHEDULED = (MaintenanceWindowStatus.planned, MaintenanceWindowStatus.notification)
+
 
 async def _auto_transition(db) -> None:
     now = datetime.utcnow()
 
+    # HUB-Expansion.md Phase 8: an approved window has nothing left to
+    # wait on — promote it to planned immediately so this same tick's
+    # to_start/push-pending queries below can pick it up right away.
+    approved = (await db.execute(
+        select(MaintenanceWindow).where(MaintenanceWindow.status == MaintenanceWindowStatus.approved)
+    )).scalars().all()
+    for w in approved:
+        w.status = MaintenanceWindowStatus.planned
+    if approved:
+        await db.flush()
+
     to_start = (await db.execute(
         select(MaintenanceWindow).where(
-            MaintenanceWindow.status == MaintenanceWindowStatus.planned,
+            MaintenanceWindow.status.in_(_SCHEDULED),
             MaintenanceWindow.scheduled_start <= now,
             MaintenanceWindow.scheduled_end > now,
         )
@@ -50,15 +69,25 @@ async def _auto_transition(db) -> None:
     # skip straight to completed.
     expired_planned = (await db.execute(
         select(MaintenanceWindow).where(
-            MaintenanceWindow.status == MaintenanceWindowStatus.planned,
+            MaintenanceWindow.status.in_(_SCHEDULED),
             MaintenanceWindow.scheduled_end <= now,
         )
     )).scalars().all()
 
     for w in to_start:
         w.status = MaintenanceWindowStatus.in_progress
+        record_event(
+            db, event_type=et.MAINTENANCE_STARTED, source=et.SOURCE_ENGINE, actor_type=et.ACTOR_SYSTEM,
+            entity_type=et.ENTITY_MAINTENANCE_WINDOW, entity_id=w.id, deployment_id=w.deployment_id,
+            status=OperationalEventStatus.info,
+        )
     for w in (*to_finish, *expired_planned):
         w.status = MaintenanceWindowStatus.completed
+        record_event(
+            db, event_type=et.MAINTENANCE_COMPLETED, source=et.SOURCE_ENGINE, actor_type=et.ACTOR_SYSTEM,
+            entity_type=et.ENTITY_MAINTENANCE_WINDOW, entity_id=w.id, deployment_id=w.deployment_id,
+            status=OperationalEventStatus.success,
+        )
     if to_start or to_finish or expired_planned:
         await db.flush()
 
@@ -75,9 +104,7 @@ async def _push_pending(db) -> None:
     now = datetime.utcnow()
     windows = (await db.execute(
         select(MaintenanceWindow).where(
-            MaintenanceWindow.status.in_(
-                [MaintenanceWindowStatus.planned, MaintenanceWindowStatus.in_progress]
-            ),
+            MaintenanceWindow.status.in_((*_SCHEDULED, MaintenanceWindowStatus.in_progress)),
             MaintenanceWindow.scheduled_end > now,
         )
     )).scalars().all()

@@ -47,12 +47,12 @@ async def _public_windows_for(db: AsyncSession, deployment_id) -> list[dict]:
 
 
 def _due_notify(window: MaintenanceWindow, state: dict, now: datetime) -> Optional[str]:
-    if window.status in (MaintenanceWindowStatus.completed, MaintenanceWindowStatus.cancelled):
+    if window.status in (MaintenanceWindowStatus.completed, MaintenanceWindowStatus.cancelled, MaintenanceWindowStatus.failed):
         return None
     if not state.get("notice_at"):
         return "scheduled"
     if (
-        window.status == MaintenanceWindowStatus.planned
+        window.status in (MaintenanceWindowStatus.planned, MaintenanceWindowStatus.notification)
         and not state.get("reminder_at")
         and window.scheduled_start - now <= timedelta(hours=settings.MAINTENANCE_REMINDER_HOURS)
     ):
@@ -80,6 +80,12 @@ async def sync_window(db: AsyncSession, window: MaintenanceWindow) -> None:
             continue
         if kind == "scheduled":
             state["notice_at"] = now_iso
+            # HUB-Expansion.md Phase 7 — purely informational: "the advance
+            # notice has gone out." Every clock-driven query still treats
+            # `notification` and `planned` identically (see
+            # core/maintenance_scheduler.py's _SCHEDULED tuple).
+            if window.status == MaintenanceWindowStatus.planned:
+                window.status = MaintenanceWindowStatus.notification
         elif kind == "reminder":
             state["reminder_at"] = now_iso
         state["last_status"] = window.status.value

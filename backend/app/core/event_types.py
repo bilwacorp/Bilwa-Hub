@@ -88,6 +88,16 @@ TICKET_LINK_REMOVED = "ticket.link_removed"
 MAINTENANCE_CREATED = "maintenance.created"
 MAINTENANCE_UPDATED = "maintenance.updated"
 MAINTENANCE_DELETED = "maintenance.deleted"
+# HUB-Expansion.md Phase 7 — lifecycle events the scheduler/approval hook
+# now emit (previously the scheduler only logged; see
+# core/maintenance_scheduler.py's _auto_transition and app/approvals/
+# maintenance_hooks.py).
+MAINTENANCE_APPROVAL_REQUESTED = "maintenance.approval_requested"
+MAINTENANCE_APPROVED = "maintenance.approved"
+MAINTENANCE_APPROVAL_REJECTED = "maintenance.approval_rejected"
+MAINTENANCE_STARTED = "maintenance.started"
+MAINTENANCE_COMPLETED = "maintenance.completed"
+MAINTENANCE_FAILED = "maintenance.failed"
 
 # ── approvals / workflow engine (app/approvals/hooks.py's fire_if_terminal
 # is the single choke point for all four of these — see its docstring) ────

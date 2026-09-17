@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
 import { Plus } from 'lucide-react'
 import api from '../../lib/api'
-import { formatDate } from '../../lib/utils'
+import { formatDate, errorMessage as errMsg } from '../../lib/utils'
 import { useAuthStore } from '../../stores/auth'
 import { DataTable, type Column } from '../../components/ui/DataTable'
 import { Badge } from '../../components/ui/Badge'
@@ -17,10 +17,16 @@ import type {
   MaintenanceWindow, MaintenanceWindowListResponse, MaintenanceWindowStatus,
 } from '../../types'
 
-const STATUS_VARIANT: Record<MaintenanceWindowStatus, 'blue' | 'amber' | 'green' | 'gray'> = {
+// HUB-Expansion.md Phase 7 widened this from 4 to 9 statuses.
+const STATUS_VARIANT: Record<MaintenanceWindowStatus, 'blue' | 'amber' | 'green' | 'gray' | 'red'> = {
+  draft: 'gray',
+  approval_required: 'amber',
+  approved: 'blue',
   planned: 'blue',
+  notification: 'blue',
   in_progress: 'amber',
   completed: 'green',
+  failed: 'red',
   cancelled: 'gray',
 }
 
@@ -42,6 +48,8 @@ type NewWindowForm = {
   scheduled_end: string
   description: string
   mode: MaintenanceMode
+  expected_impact: string
+  save_as_draft: boolean
 }
 
 export default function MaintenanceWindowsPage() {
@@ -60,7 +68,7 @@ export default function MaintenanceWindowsPage() {
     id ? (deployments?.items.find((d) => d.id === id)?.client_name ?? 'Single deployment') : 'Fleet-wide'
 
   const [showCreate, setShowCreate] = useState(false)
-  const form = useForm<NewWindowForm>({ defaultValues: { mode: 'banner', deployment_id: '' } })
+  const form = useForm<NewWindowForm>({ defaultValues: { mode: 'banner', deployment_id: '', save_as_draft: false } })
   const createMutation = useMutation({
     // datetime-local gives a naive *local* string; the backend stores naive
     // UTC — convert here so a window scheduled for "14:00" means 14:00 the
@@ -69,17 +77,34 @@ export default function MaintenanceWindowsPage() {
       deployment_id: v.deployment_id || null,
       description: v.description,
       mode: v.mode,
+      expected_impact: v.expected_impact || null,
+      save_as_draft: v.save_as_draft,
       scheduled_start: new Date(v.scheduled_start).toISOString(),
       scheduled_end: new Date(v.scheduled_end).toISOString(),
     }),
-    onSuccess: () => { toast.success('Maintenance window created'); setShowCreate(false); form.reset({ mode: 'banner', deployment_id: '' }); qc.invalidateQueries({ queryKey: ['maintenance-windows'] }) },
-    onError: () => toast.error('Failed to create maintenance window'),
+    onSuccess: (_data, v) => {
+      toast.success(v.save_as_draft ? 'Draft saved' : 'Maintenance window created')
+      setShowCreate(false)
+      form.reset({ mode: 'banner', deployment_id: '', save_as_draft: false })
+      qc.invalidateQueries({ queryKey: ['maintenance-windows'] })
+    },
+    onError: (e) => toast.error(errMsg(e, 'Failed to create maintenance window')),
   })
 
   const patchMutation = useMutation({
     mutationFn: ({ id, body }: { id: string; body: Record<string, unknown> }) => api.patch(`/maintenance-windows/${id}`, body),
     onSuccess: () => { toast.success('Updated'); qc.invalidateQueries({ queryKey: ['maintenance-windows'] }) },
     onError: () => toast.error('Failed to update'),
+  })
+
+  const submitMutation = useMutation({
+    mutationFn: (id: string) => api.post(`/maintenance-windows/${id}/submit`),
+    onSuccess: (r) => {
+      const status = (r.data as MaintenanceWindow).status
+      toast.success(status === 'approval_required' ? 'Submitted for approval' : 'Window scheduled')
+      qc.invalidateQueries({ queryKey: ['maintenance-windows'] })
+    },
+    onError: (e) => toast.error(errMsg(e, 'Failed to submit')),
   })
 
   const columns: Column<MaintenanceWindow>[] = [
@@ -92,14 +117,17 @@ export default function MaintenanceWindowsPage() {
       return <Badge variant={b.variant}>{b.label}</Badge>
     } },
     { key: 'status', header: 'Status', render: (w) => <Badge variant={STATUS_VARIANT[w.status]}>{w.status.replace('_', ' ')}</Badge> },
-    ...(can('maintenance.update') ? [{
+    ...(can('maintenance.update') || can('maintenance.create') ? [{
       key: 'actions', header: '', className: 'text-right',
       render: (w: MaintenanceWindow) => (
         <div className="flex justify-end gap-1">
-          {w.status === 'in_progress' && (
+          {w.status === 'draft' && can('maintenance.create') && (
+            <Button size="sm" variant="secondary" loading={submitMutation.isPending} onClick={() => submitMutation.mutate(w.id)}>Submit</Button>
+          )}
+          {can('maintenance.update') && w.status === 'in_progress' && (
             <Button size="sm" variant="ghost" onClick={() => patchMutation.mutate({ id: w.id, body: { status: 'completed' } })}>Complete</Button>
           )}
-          {(w.status === 'planned' || w.status === 'in_progress') && (
+          {can('maintenance.update') && ['draft', 'approved', 'planned', 'notification', 'in_progress'].includes(w.status) && (
             <Button size="sm" variant="ghost" onClick={() => patchMutation.mutate({ id: w.id, body: { status: 'cancelled' } })}>Cancel</Button>
           )}
         </div>
@@ -119,7 +147,12 @@ export default function MaintenanceWindowsPage() {
 
       <Modal
         open={showCreate} onClose={() => setShowCreate(false)} title="New Maintenance Window" size="sm"
-        footer={<><Button variant="secondary" onClick={() => setShowCreate(false)}>Cancel</Button><Button loading={createMutation.isPending} onClick={form.handleSubmit((v) => createMutation.mutate(v))}>Create</Button></>}
+        footer={<>
+          <Button variant="secondary" onClick={() => setShowCreate(false)}>Cancel</Button>
+          <Button loading={createMutation.isPending} onClick={form.handleSubmit((v) => createMutation.mutate(v))}>
+            {form.watch('save_as_draft') ? 'Save Draft' : 'Create'}
+          </Button>
+        </>}
       >
         <form className="space-y-4">
           <Select
@@ -133,6 +166,7 @@ export default function MaintenanceWindowsPage() {
           <Input type="datetime-local" label="Start" {...form.register('scheduled_start', { required: true })} />
           <Input type="datetime-local" label="End" {...form.register('scheduled_end', { required: true })} />
           <Input label="Description" placeholder="e.g. Database upgrade" {...form.register('description', { required: true })} />
+          <Input label="Expected impact (optional)" placeholder="e.g. Brief API downtime" {...form.register('expected_impact')} />
           <div>
             <Select
               label="Enforcement"
@@ -143,6 +177,17 @@ export default function MaintenanceWindowsPage() {
               {MODE_OPTIONS.find((o) => o.value === form.watch('mode'))?.hint}
             </p>
           </div>
+          {/* HUB-Expansion.md Phase 7/8 — mirrors app/approvals/maintenance_hooks
+              .py's _is_high_risk exactly (fleet-wide OR lockout). */}
+          {(!form.watch('deployment_id') || form.watch('mode') === 'lockout') && !form.watch('save_as_draft') && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+              Fleet-wide or lockout windows need admin approval before they're scheduled.
+            </p>
+          )}
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" {...form.register('save_as_draft')} />
+            Save as draft (submit for scheduling later)
+          </label>
           <p className="text-xs text-muted">Clients see an in-app banner immediately; their admins also get an email.</p>
         </form>
       </Modal>

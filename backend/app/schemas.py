@@ -482,6 +482,14 @@ class MaintenanceWindowCreate(BaseModel):
     scheduled_end: datetime
     description: str
     mode: MaintenanceMode = "banner"
+    expected_impact: Optional[str] = None
+    # HUB-Expansion.md Phase 7 — when true, the window is created as
+    # `draft` (never pushed, never routed for approval) instead of going
+    # through the create-time gate-or-schedule decision (api/routers/
+    # maintenance.py's create_window -> app/approvals/maintenance_hooks
+    # .route_window). Default false preserves the pre-Phase-7 behavior of
+    # a plain create going straight to `planned` for the common case.
+    save_as_draft: bool = False
 
     @field_validator("scheduled_start", "scheduled_end")
     @classmethod
@@ -495,6 +503,8 @@ class MaintenanceWindowUpdate(BaseModel):
     description: Optional[str] = None
     status: Optional[MaintenanceWindowStatus] = None
     mode: Optional[MaintenanceMode] = None
+    expected_impact: Optional[str] = None
+    actual_impact: Optional[str] = None
 
     @field_validator("scheduled_start", "scheduled_end")
     @classmethod
@@ -510,6 +520,10 @@ class MaintenanceWindowOut(BaseModel):
     description: str
     status: MaintenanceWindowStatus
     mode: MaintenanceMode
+    expected_impact: Optional[str]
+    actual_impact: Optional[str]
+    approved_by: Optional[uuid.UUID]
+    created_by: Optional[uuid.UUID]
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -657,3 +671,102 @@ class DeploymentActionExecutionOut(BaseModel):
     attempts: List[DeploymentActionAttemptOut] = []
 
     model_config = {"from_attributes": True}
+
+
+# ── operations dashboard (HUB-Expansion.md Phase 10) ──────────────────────
+# See app/services/dashboard.py for how every field here is computed —
+# each one is a real query over existing data, not a placeholder; the
+# module docstring there also documents which sub-sections quietly
+# zero out (rather than 403) when the caller lacks that domain's own
+# view permission.
+
+class DashboardFleetSummary(BaseModel):
+    total: int
+    healthy: int
+    warning: int
+    offline: int
+    unknown: int
+    under_maintenance: int
+
+
+class DashboardReleaseItem(BaseModel):
+    deployment_id: uuid.UUID
+    client_name: str
+    version: Optional[str]
+    deployed_at: datetime
+
+
+class DashboardFailedActionItem(BaseModel):
+    deployment_id: uuid.UUID
+    client_name: str
+    action_key: str
+    last_error: Optional[str]
+    last_attempted_at: Optional[datetime]
+
+
+class DashboardDeploymentsSummary(BaseModel):
+    recently_deployed: List[DashboardReleaseItem]
+    recently_failed: List[DashboardFailedActionItem]
+    outdated_versions: int
+    missing_heartbeat: int
+    high_risk: int
+
+
+class DashboardSupportSummary(BaseModel):
+    open: int
+    unassigned: int
+    escalated: int
+    awaiting_engineering: int
+
+
+class DashboardMaintenanceSummary(BaseModel):
+    upcoming: int
+    active: int
+    failed: int
+
+
+class DashboardApprovalsSummary(BaseModel):
+    pending: int
+    overdue: int
+    recently_approved: int
+    recently_rejected: int
+
+
+class DashboardIntegrationsSummary(BaseModel):
+    github_webhook_failures: int
+    deployment_callback_failures: int
+    notification_failures: int
+
+
+class DashboardAttentionItem(BaseModel):
+    kind: str
+    severity: Literal["warning", "critical"]
+    message: str
+    deployment_id: Optional[uuid.UUID] = None
+
+
+class DashboardOut(BaseModel):
+    fleet: DashboardFleetSummary
+    deployments: DashboardDeploymentsSummary
+    support: DashboardSupportSummary
+    maintenance: DashboardMaintenanceSummary
+    approvals: DashboardApprovalsSummary
+    integrations: DashboardIntegrationsSummary
+    attention: List[DashboardAttentionItem]
+
+
+# ── integration center (HUB-Expansion.md Phase 11) ────────────────────────
+
+class IntegrationSummaryOut(BaseModel):
+    key: str
+    name: str
+    status: Literal["connected", "disconnected", "error", "not_configured"]
+    connected: bool
+    last_sync_at: Optional[datetime] = None
+    last_webhook_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+    last_error_at: Optional[datetime] = None
+    detail: Optional[str] = None
+    # Set only for a GitHub card — the frontend's "Test Connection" button
+    # needs this to call POST /github/integrations/{id}/test-connection.
+    integration_id: Optional[uuid.UUID] = None
