@@ -5,20 +5,24 @@ public webhook endpoint lives in webhook_api.py, mirroring the existing
 register.py/ingest.py-vs-deployments.py separation of "machine-
 authenticated" from "Casbin-authenticated" routes."""
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import event_types as et
+from app.core.config import settings
 from app.core.permissions import GITHUB_MANAGE, GITHUB_SYNC, GITHUB_TEST_CONNECTION, GITHUB_VIEW, require_permission
+from app.core.security import create_access_token, decode_token
 from app.db.session import get_db
-from app.integrations.github import client, sync
+from app.integrations.github import app_auth, client, sync
 from app.integrations.github.client import GitHubApiError
 from app.integrations.github.models import (
-    DeploymentGitHubRepository, GitHubIntegration, GitHubIntegrationStatus, GitHubIssue, GitHubPullRequest,
-    GitHubRelease, GitHubRepository,
+    DeploymentGitHubRepository, GitHubAuthMode, GitHubIntegration, GitHubIntegrationStatus, GitHubIssue,
+    GitHubPullRequest, GitHubRelease, GitHubRepository,
 )
 from app.integrations.github.schemas import (
     GitHubIntegrationCreate, GitHubIntegrationOut, GitHubIntegrationUpdate, GitHubIssueOut, GitHubPullRequestOut,
@@ -26,10 +30,17 @@ from app.integrations.github.schemas import (
     GitHubTestConnectionResult,
 )
 from app.integrations.github.tasks import sync_repository_task
-from app.models import User
+from app.models import OperationalEventStatus, User
 from app.services import crypto
+from app.services.events import record_event
 
 router = APIRouter(prefix="/github", tags=["github"])
+
+# Signed-state purpose claim, same pattern password-reset/access tokens
+# use core/security.py's create_access_token/decode_token for — a short-
+# lived HS256 token, not a second crypto primitive.
+_INSTALL_STATE_PURPOSE = "github_app_install"
+_INSTALL_STATE_TTL_MINUTES = 15
 
 
 def _integration_out(integration: GitHubIntegration) -> GitHubIntegrationOut:
@@ -42,7 +53,7 @@ def _integration_out(integration: GitHubIntegration) -> GitHubIntegrationOut:
     alone the decrypted one."""
     return GitHubIntegrationOut(
         id=integration.id, name=integration.name, github_org=integration.github_org,
-        auth_mode=integration.auth_mode, status=integration.status,
+        auth_mode=integration.auth_mode, installation_id=integration.installation_id, status=integration.status,
         has_access_token=bool(integration.access_token_encrypted),
         has_webhook_secret=bool(integration.webhook_secret_encrypted),
         last_synced_at=integration.last_synced_at, last_webhook_at=integration.last_webhook_at,
@@ -87,6 +98,67 @@ async def list_integrations(db: AsyncSession = Depends(get_db), current_user: Us
     return [_integration_out(i) for i in rows]
 
 
+@router.get("/app/install-url")
+async def get_app_install_url(current_user: User = Depends(require_permission(*GITHUB_MANAGE))):
+    """Returns the GitHub App installation URL to redirect the browser
+    to — see docs/integrations/github.md's "GitHub App auth mode". `state`
+    is signed (core/security.py's create_access_token — same HS256/
+    SECRET_KEY primitive staff login tokens use, not a new one) so the
+    callback can best-effort attribute the resulting integration to
+    whoever started this; the callback still works correctly if `state`
+    is missing/expired/tampered, since the `installation` webhook (not
+    this redirect) is the actual source of truth for provisioning."""
+    if not settings.GITHUB_APP_ID or not settings.GITHUB_APP_SLUG or not settings.GITHUB_APP_PRIVATE_KEY:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "GitHub App is not configured on this hub (GITHUB_APP_ID/GITHUB_APP_SLUG/GITHUB_APP_PRIVATE_KEY)",
+        )
+    state = create_access_token(
+        {"purpose": _INSTALL_STATE_PURPOSE, "user_id": str(current_user.id)},
+        expires_delta=timedelta(minutes=_INSTALL_STATE_TTL_MINUTES),
+    )
+    return {"url": f"https://github.com/apps/{settings.GITHUB_APP_SLUG}/installations/new?state={state}"}
+
+
+@router.get("/app/callback")
+async def github_app_callback(
+    installation_id: Optional[int] = Query(None), setup_action: Optional[str] = Query(None),
+    state: Optional[str] = Query(None), db: AsyncSession = Depends(get_db),
+):
+    """GitHub redirects the browser here after the install flow — public
+    (the browser carries no bearer token), so `state` is the only thing
+    tying this to a staff session, and even that's best-effort (see
+    get_app_install_url's docstring). setup_action=install/update both
+    just re-run the same upsert; nothing to do for anything else."""
+    if not installation_id or setup_action not in ("install", "update"):
+        return RedirectResponse(f"{settings.FRONTEND_URL}/github")
+
+    created_by = None
+    decoded = decode_token(state) if state else None
+    if decoded and decoded.get("purpose") == _INSTALL_STATE_PURPOSE:
+        try:
+            created_by = uuid.UUID(decoded["user_id"])
+        except (KeyError, ValueError):
+            created_by = None
+
+    try:
+        info = await app_auth.get_installation_info(installation_id)
+        account_login = info.get("account", {}).get("login", str(installation_id))
+        integration = await app_auth.upsert_installation(db, installation_id, account_login, created_by)
+        record_event(
+            db, event_type=et.GITHUB_APP_INSTALLED, source=et.SOURCE_GITHUB, actor_type=et.ACTOR_SYSTEM,
+            actor_id=created_by, entity_type=et.ENTITY_GITHUB_INTEGRATION, entity_id=integration.id,
+            status=OperationalEventStatus.info, metadata={"installation_id": installation_id, "github_org": account_login},
+        )
+        await db.commit()
+    except GitHubApiError:
+        # The webhook still provisions this installation even if this
+        # best-effort callback lookup fails (rate limit, transient
+        # connection error) — no user-facing error, just a plain redirect.
+        pass
+    return RedirectResponse(f"{settings.FRONTEND_URL}/github?installed=1")
+
+
 @router.patch("/integrations/{integration_id}", response_model=GitHubIntegrationOut)
 async def update_integration(
     integration_id: str, body: GitHubIntegrationUpdate, db: AsyncSession = Depends(get_db),
@@ -110,7 +182,7 @@ async def test_connection(
 ):
     integration = await _get_integration_or_404(db, integration_id)
     try:
-        data = await client.test_connection(integration)
+        data = await client.test_connection(db, integration)
     except GitHubApiError as e:
         integration.status = GitHubIntegrationStatus.error
         integration.last_error = str(e)[:2000]
@@ -120,6 +192,12 @@ async def test_connection(
     integration.status = GitHubIntegrationStatus.connected
     integration.last_error = None
     await db.flush()
+    # PAT mode's /user response has a "login"; the github_app mode probe
+    # (/installation/repositories) has none — a human-readable repo count
+    # instead is the closest equivalent "who/what did we just prove we can see".
+    if integration.auth_mode == GitHubAuthMode.github_app:
+        detail = f"Connected — installation can see {data.get('total_count', 0)} repositor{'y' if data.get('total_count') == 1 else 'ies'}"
+        return GitHubTestConnectionResult(ok=True, detail=detail)
     return GitHubTestConnectionResult(ok=True, detail="Connected", github_login=data.get("login"))
 
 

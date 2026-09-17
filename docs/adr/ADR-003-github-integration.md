@@ -13,17 +13,18 @@ decisions worth defending independently.
 
 ## Decisions
 
-**1. Personal/fine-grained access token, not a GitHub App.** A GitHub
-App needs its own registration flow (manifest, private key, installation
-token exchange/caching) with no existing precedent in this codebase to
-build on. The phase brief explicitly allows this tradeoff ("if GitHub App
-auth would create excessive complexity, document the tradeoff and use
-the simplest secure implementation"). `GitHubIntegration.auth_mode` is
-still a real column (native enum, `pat`/`github_app`) so a future
-GitHub-App mode is a schema-compatible addition, not a rewrite — but it
-does need its own migration (new columns: app id, private key, ...),
-which is fine, since that migration would be adding genuinely new HUB-
-owned config, not just flipping an enum value.
+**1. Personal/fine-grained access token, not a GitHub App — at first.** A
+GitHub App needs its own registration flow (manifest, private key,
+installation token exchange/caching) with no existing precedent in this
+codebase to build on. The phase brief explicitly allows this tradeoff ("if
+GitHub App auth would create excessive complexity, document the tradeoff
+and use the simplest secure implementation"). `GitHubIntegration.auth_mode`
+is still a real column (native enum, `pat`/`github_app`) so a future
+GitHub-App mode is a schema-compatible addition, not a rewrite. **Update:**
+implemented in migration `022_github_app_auth.py` — see
+`docs/adr/ADR-004-github-app-auth.md`. Confirms the prediction below: it
+was additive (two new nullable columns, a new module, no changes to any
+existing PAT-mode row or call site's behavior).
 
 **2. `Deployment ↔ GitHubRepository` is many-to-many, not one-to-one.**
 The brief is explicit: "do not assume one repository = one deployment."

@@ -28,6 +28,7 @@ class GitHubIntegrationOut(BaseModel):
     name: str
     github_org: str
     auth_mode: GitHubAuthMode
+    installation_id: Optional[int] = None
     status: GitHubIntegrationStatus
     # Never the token/secret themselves — only whether one is on file.
     has_access_token: bool

@@ -57,10 +57,10 @@ not a retrospective description.
   repos — and a repo can serve more than one deployment — e.g. a
   single-tenant-per-deployment product with one shared codebase), so
   Phase 4 has a real edge to extend upward from once `Application` exists.
-- **No GitHub App registration flow.** A GitHub App needs its own GitHub-
-  side registration (app manifest, private key, installation flow,
-  installation-token exchange/caching) — real added complexity with no
-  existing precedent in this codebase to build on. Phase 3 uses a
+- **No GitHub App registration flow — at first.** A GitHub App needs its
+  own GitHub-side registration (app manifest, private key, installation
+  flow, installation-token exchange/caching) — real added complexity with
+  no existing precedent in this codebase to build on. Phase 3 uses a
   **personal/fine-grained access token per integration**, encrypted at
   rest with the same `services/crypto.py` Fernet scheme as
   `action_key_encrypted`. This is the documented tradeoff the phase brief
@@ -68,7 +68,9 @@ not a retrospective description.
   complexity, document the tradeoff and use the simplest secure
   implementation"). The credential is stored behind one function
   (`client.py`'s internal token resolution) — swapping to GitHub App
-  auth later means changing that one function, not every call site.
+  auth later means changing that one function, not every call site. **This
+  prediction held**: GitHub App auth was added later, additively — see
+  "GitHub App auth mode" below and `docs/adr/ADR-004-github-app-auth.md`.
 
 ## Data model
 
@@ -314,9 +316,50 @@ disproportionate to "keep this lightweight." One new flat nav entry
 ("GitHub") is added instead. `DeploymentDetailPage.tsx` gets one new
 section reading `GET /deployments/{id}/github`.
 
+## GitHub App auth mode (added later — see ADR-004)
+
+A second `GitHubIntegration.auth_mode`, `github_app`, alongside the `pat`
+mode above (both coexist; nothing here changes PAT-mode behavior). Full
+design/reasoning in `docs/adr/ADR-004-github-app-auth.md` — summary:
+
+- **One GitHub App, configured via `Settings`** (`GITHUB_APP_ID`,
+  `GITHUB_APP_SLUG`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_WEBHOOK_SECRET`
+  — `core/config.py`), not per-integration DB columns. Empty/unconfigured
+  by default.
+- **Installation flow only** (`app/integrations/github/app_auth.py`) — no
+  OAuth user-login exchange, since HUB only ever needs to act as the
+  installed app, never as a GitHub user. `GET /github/app/install-url`
+  (`github.manage`) returns
+  `https://github.com/apps/{slug}/installations/new?state=<signed>`;
+  GitHub redirects back to `GET /github/app/callback` after install.
+- **The `installation` webhook (`POST /github/app/webhooks`, the App's
+  one shared webhook URL) is the actual source of truth for provisioning
+  a `GitHubIntegration` row** (`app_auth.upsert_installation`,
+  idempotent by `installation_id`) — the callback redirect is UX/
+  attribution only and degrades gracefully if it's ever dropped.
+- **Installation access tokens are minted via a JWT signed with the
+  App's private key** (`app_auth._app_jwt`, RS256 via the
+  `python-jose[cryptography]` dependency already used for staff login),
+  then cached (encrypted, reusing `access_token_encrypted`) with
+  `access_token_expires_at` and refreshed automatically —
+  `client.py`'s `_resolve_token` branches on `auth_mode` so every existing
+  GitHub API call (`test_connection`/`get_repository`/`list_*`) works
+  unchanged for either mode.
+- **Repository access is auto-registered from the installation's own
+  webhooks** — no manual "add repository" step needed for a github_app-
+  mode integration (it's still available, and still the only option for
+  PAT mode). `installation`'s `repositories` list (initial grant) and
+  `installation_repositories`'s `repositories_added`/`repositories_removed`
+  (later changes) are both handled asynchronously via `webhooks.py`'s
+  normal `_HANDLERS` dispatch (`app_auth.register_repositories`/
+  `deactivate_repositories`). A removed repo is deactivated
+  (`GitHubRepository.is_active=False`), never deleted, and reactivated in
+  place if access is re-granted later.
+
 ## What Phase 3 deliberately does not do
 
-- No GitHub App auth (see Authentication above).
+- No GitHub App auth (see Authentication above — added later, see
+  "GitHub App auth mode" above).
 - No pagination beyond page 1 of any GitHub list endpoint.
 - No CI/CD event handling (`workflow_run`/`check_run` webhooks are
   received and persisted, not interpreted) — Phase 5.

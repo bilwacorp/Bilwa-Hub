@@ -458,6 +458,7 @@ export interface GitHubIntegration {
   name: string
   github_org: string
   auth_mode: 'pat' | 'github_app'
+  installation_id: number | null
   status: GitHubIntegrationStatus
   has_access_token: boolean
   has_webhook_secret: boolean

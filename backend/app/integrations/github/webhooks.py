@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import event_types as et
 from app.integrations.cicd.github_actions import GitHubActionsProvider, looks_like_version
+from app.integrations.github import app_auth
 from app.integrations.github.models import (
     DeploymentGitHubRepository, GitHubIntegration, GitHubRepository, GitHubWebhookEvent, GitHubWebhookEventStatus,
 )
@@ -191,6 +192,32 @@ async def _handle_workflow_run(db: AsyncSession, integration: GitHubIntegration,
     )
 
 
+async def _handle_installation(db: AsyncSession, integration: GitHubIntegration, webhook_event: GitHubWebhookEvent) -> None:
+    """Only the `action=created` case does anything — the initial
+    repository list GitHub hands back at install time
+    (`app_auth.register_repositories`). `action=deleted` is handled
+    synchronously in webhook_api.py instead (it needs to resolve/mark the
+    integration itself before a GitHubWebhookEvent row referencing it can
+    even be inserted) — this handler still runs for it, harmlessly, since
+    there's nothing further to do here."""
+    payload = webhook_event.payload
+    if payload.get("action") == "created":
+        await app_auth.register_repositories(db, integration, payload.get("repositories") or [])
+
+
+async def _handle_installation_repositories(db: AsyncSession, integration: GitHubIntegration, webhook_event: GitHubWebhookEvent) -> None:
+    """GitHub Apps' equivalent of "add/remove a repo" — fired when an
+    admin changes which repos an existing installation can see, as
+    opposed to `installation` (the whole install/uninstall)."""
+    payload = webhook_event.payload
+    added = payload.get("repositories_added") or []
+    removed = payload.get("repositories_removed") or []
+    if added:
+        await app_auth.register_repositories(db, integration, added)
+    if removed:
+        await app_auth.deactivate_repositories(db, removed)
+
+
 # event_type (X-GitHub-Event header) -> handler. check_run (job/step-level,
 # not deployment-level) is deliberately absent — a webhook event with no
 # handler here is still persisted (GitHubWebhookEvent) and marked
@@ -201,4 +228,6 @@ _HANDLERS = {
     "push": _handle_push,
     "release": _handle_release,
     "workflow_run": _handle_workflow_run,
+    "installation": _handle_installation,
+    "installation_repositories": _handle_installation_repositories,
 }

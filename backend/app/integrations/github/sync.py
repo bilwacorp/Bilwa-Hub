@@ -19,7 +19,7 @@ async def add_repository(db: AsyncSession, integration: GitHubIntegration, full_
     """Fetches the repo from GitHub once to confirm it exists and the
     integration's token can see it, then creates (or returns the
     existing) local row — a no-op if this repo is already known."""
-    data = await client.get_repository(integration, full_name)
+    data = await client.get_repository(db, integration, full_name)
     existing = (await db.execute(select(GitHubRepository).where(GitHubRepository.external_id == data["id"]))).scalar_one_or_none()
     if existing is not None:
         return existing
@@ -34,15 +34,15 @@ async def add_repository(db: AsyncSession, integration: GitHubIntegration, full_
 
 
 async def sync_repository(db: AsyncSession, repository: GitHubRepository, integration: GitHubIntegration) -> None:
-    repo_data = await client.get_repository(integration, repository.full_name)
+    repo_data = await client.get_repository(db, integration, repository.full_name)
     repository.default_branch = repo_data.get("default_branch") or repository.default_branch
     repository.html_url = repo_data["html_url"]
 
-    for pr_data in await client.list_pull_requests(integration, repository.full_name):
+    for pr_data in await client.list_pull_requests(db, integration, repository.full_name):
         await upsert_pull_request(db, repository, pr_data)
-    for issue_data in await client.list_issues(integration, repository.full_name):
+    for issue_data in await client.list_issues(db, integration, repository.full_name):
         await upsert_issue(db, repository, issue_data)
-    for release_data in await client.list_releases(integration, repository.full_name):
+    for release_data in await client.list_releases(db, integration, repository.full_name):
         await upsert_release(db, repository, release_data)
 
     repository.last_synced_at = datetime.utcnow()

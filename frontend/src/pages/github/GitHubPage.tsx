@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
-import { Plus, RotateCw, ExternalLink, GitBranch } from 'lucide-react'
+import { Github, Plus, RotateCw, ExternalLink, GitBranch } from 'lucide-react'
 import api from '../../lib/api'
-import { formatDate, errorMessage as errMsg } from '../../lib/utils'
+import { cn, formatDate, errorMessage as errMsg } from '../../lib/utils'
 import { useAuthStore } from '../../stores/auth'
 import { Tabs } from '../../components/ui/Tabs'
 import { DataTable, type Column } from '../../components/ui/DataTable'
@@ -28,10 +29,25 @@ type AddRepoForm = { full_name: string }
 function IntegrationsTab() {
   const qc = useQueryClient()
   const can = useAuthStore((s) => s.can)
+  const [searchParams, setSearchParams] = useSearchParams()
   const { data: integrations, isLoading } = useQuery({
     queryKey: ['github-integrations'],
     queryFn: () => api.get<GitHubIntegration[]>('/github/integrations').then((r) => r.data),
     refetchInterval: 30_000,
+  })
+
+  useEffect(() => {
+    if (searchParams.get('installed') !== '1') return
+    toast.success('GitHub App connected')
+    qc.invalidateQueries({ queryKey: ['github-integrations'] })
+    setSearchParams((params) => { params.delete('installed'); return params }, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
+
+  const connectMutation = useMutation({
+    mutationFn: () => api.get<{ url: string }>('/github/app/install-url').then((r) => r.data.url),
+    onSuccess: (url) => { window.location.href = url },
+    onError: (e) => toast.error(errMsg(e, 'GitHub App is not configured on this hub')),
   })
 
   const [showCreate, setShowCreate] = useState(false)
@@ -72,6 +88,10 @@ function IntegrationsTab() {
   const columns: Column<GitHubIntegration>[] = [
     { key: 'name', header: 'Name', render: (i) => <span className="font-medium text-text">{i.name}</span> },
     { key: 'github_org', header: 'Org', render: (i) => <span className="font-mono text-xs text-muted">{i.github_org}</span> },
+    {
+      key: 'auth_mode', header: 'Auth',
+      render: (i) => <Badge variant={i.auth_mode === 'github_app' ? 'blue' : 'gray'}>{i.auth_mode === 'github_app' ? 'GitHub App' : 'Token'}</Badge>,
+    },
     { key: 'status', header: 'Status', render: (i) => <Badge variant={STATUS_VARIANT[i.status]}>{i.status}</Badge> },
     { key: 'last_synced_at', header: 'Last synced', render: (i) => formatDate(i.last_synced_at) },
     { key: 'last_webhook_at', header: 'Last webhook', render: (i) => formatDate(i.last_webhook_at) },
@@ -98,11 +118,18 @@ function IntegrationsTab() {
     <div>
       <div className="flex items-center justify-between mb-3">
         <p className="text-sm text-muted max-w-2xl">
-          Each integration is one GitHub org's credentials (a personal/fine-grained access token) plus a webhook
-          secret. Point the org's webhook at the path shown after creating it — HUB never returns the token/secret
-          themselves once saved.
+          "Connect with GitHub" installs a GitHub App on the org you pick — no token or webhook secret to manage.
+          "Use a token instead" connects with a personal/fine-grained access token plus a webhook secret you paste
+          into both HUB and GitHub yourself. HUB never returns a token/secret once saved, either way.
         </p>
-        {can('github.manage') && <Button icon={<Plus size={15} />} onClick={() => setShowCreate(true)}>New Integration</Button>}
+        {can('github.manage') && (
+          <div className="flex gap-2">
+            <Button icon={<Github size={15} />} loading={connectMutation.isPending} onClick={() => connectMutation.mutate()}>
+              Connect with GitHub
+            </Button>
+            <Button variant="secondary" icon={<Plus size={15} />} onClick={() => setShowCreate(true)}>Use a token instead</Button>
+          </div>
+        )}
       </div>
       <DataTable columns={columns} data={integrations ?? []} loading={isLoading} keyExtractor={(i) => i.id} emptyMessage="No GitHub integrations configured yet." />
 
@@ -171,10 +198,16 @@ function RepositoriesTab() {
     {
       key: 'full_name', header: 'Repository',
       render: (r) => (
-        <a href={r.html_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-text hover:text-accent">
+        <a href={r.html_url} target="_blank" rel="noreferrer" className={cn('inline-flex items-center gap-1 font-medium hover:text-accent', r.is_active ? 'text-text' : 'text-muted line-through')}>
           {r.full_name} <ExternalLink size={12} />
         </a>
       ),
+    },
+    {
+      key: 'is_active', header: 'Access',
+      render: (r) => r.is_active
+        ? <Badge variant="green">Active</Badge>
+        : <Badge variant="gray">Removed from installation</Badge>,
     },
     { key: 'default_branch', header: 'Default branch', render: (r) => <span className="font-mono text-xs text-muted">{r.default_branch}</span> },
     { key: 'last_synced_at', header: 'Last synced', render: (r) => formatDate(r.last_synced_at) },

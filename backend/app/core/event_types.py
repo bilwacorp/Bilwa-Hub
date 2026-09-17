@@ -42,6 +42,7 @@ ENTITY_GITHUB_ISSUE = "github_issue"
 ENTITY_GITHUB_RELEASE = "github_release"
 ENTITY_GITHUB_COMMIT = "github_commit"
 ENTITY_GITHUB_WEBHOOK_EVENT = "github_webhook_event"
+ENTITY_GITHUB_INTEGRATION = "github_integration"
 ENTITY_CUSTOMER = "customer"
 ENTITY_APPLICATION = "application"
 ENTITY_DEPLOYMENT_RELEASE = "deployment_release"
@@ -131,6 +132,8 @@ GITHUB_COMMIT_PUSHED = "github.commit.pushed"
 GITHUB_RELEASE_PUBLISHED = "github.release.published"
 GITHUB_REPOSITORY_SYNCED = "github.repository_synced"
 GITHUB_REPOSITORY_SYNC_FAILED = "github.repository_sync_failed"
+GITHUB_APP_INSTALLED = "github.app_installed"
+GITHUB_APP_UNINSTALLED = "github.app_uninstalled"
 
 # ── deployment lineage (HUB-Expansion.md Phase 4 — see app/models.py's
 # Customer/Application/DeploymentRelease and app/services/lineage.py) ─────

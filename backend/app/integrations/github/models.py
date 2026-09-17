@@ -56,8 +56,17 @@ class GitHubIntegration(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     github_org: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
     auth_mode: Mapped[GitHubAuthMode] = mapped_column(Enum(GitHubAuthMode), default=GitHubAuthMode.pat, nullable=False)
+    # For auth_mode=github_app, this holds the cached, short-lived
+    # *installation* access token instead of a long-lived PAT — same
+    # column, different lifetime semantics per mode (see
+    # access_token_expires_at, app_auth.get_installation_token). Never
+    # populated for a mode it doesn't apply to.
     access_token_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    access_token_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     webhook_secret_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # GitHub's own installation id — only set for auth_mode=github_app,
+    # unique because one installation maps to exactly one HUB integration.
+    installation_id: Mapped[Optional[int]] = mapped_column(Integer, unique=True, nullable=True)
     status: Mapped[GitHubIntegrationStatus] = mapped_column(
         Enum(GitHubIntegrationStatus), default=GitHubIntegrationStatus.disconnected, nullable=False,
     )
