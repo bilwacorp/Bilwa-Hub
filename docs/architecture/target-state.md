@@ -105,6 +105,49 @@ complete rather than frozen like the Phase 0 snapshot.
                        WhatsApp/Monitoring cards derived from existing
                        data; never a live external call itself, and
                        never returns a secret — see ADR-008)
+      │
+      ▼
+  RBAC + SECURITY AUDIT (Phase 14/15: catalog audit — none of Phase 14's
+                          twelve suggested permissions added, each either
+                          already existed under a different name or was
+                          deliberately rejected; Phase 15's checklist
+                          found and fixed two real gaps — SSRF hardening
+                          on Deployment.base_url (app/core/url_safety.py,
+                          two-layer sync format + async DNS-resolution
+                          check) and rate limiting on /register + the
+                          GitHub webhook (app/core/rate_limit.py,
+                          fail-open Redis fixed-window) — see ADR-009)
+      │
+      ▼
+  STAFF/RBAC AUDIT TRAIL (Phase 19: users.py/rbac.py previously emitted
+                           zero OperationalEvent rows; now emit ten new
+                           STAFF_*/ROLE_* event types with before/after
+                           state in metadata.changes. New
+                           OperationalEvent.actor_ip column, populated via
+                           a contextvars-based request-scoped IP
+                           (app/core/request_context.py + main.py's
+                           client_ip_middleware) with zero changes to any
+                           pre-existing record_event() call site. Audit
+                           immutability (no PATCH/DELETE for
+                           OperationalEvent anywhere) verified by test,
+                           already true by omission — see ADR-010)
+      │
+      ▼
+  OBSERVABILITY + UX + DETAIL PAGE (Phase 16/17/18: Phase 16 has no page
+                                     of its own — its summary fields
+                                     landed in Phase 18's Overview/
+                                     Technical sections. Phase 17 added
+                                     two real sidebar groups, Fleet and
+                                     Workflows (not the doc's full nested
+                                     tree — no page merely because a
+                                     table exists), and fixed a pre-
+                                     existing nav gap (Approval Rules had
+                                     no link). Phase 18 restructured
+                                     DeploymentDetailPage.tsx into Header/
+                                     Overview/Software/Technical/Support
+                                     (new)/Maintenance (new, incl. a new
+                                     Schedule Maintenance quick action)/
+                                     Approvals/Timeline — see ADR-011)
 ```
 
 Every `OperationalEvent`-driven action (deployment lifecycle, tickets,
@@ -183,14 +226,9 @@ full reasoning. A CI system that genuinely has its own credentials/
 webhook (unlike GitHub Actions here) should still follow the full
 package shape above.
 
-## Still not started (unchanged from the Phase 0 audit unless noted)
+## Still not started
 
-- Phase 14/15/19 (RBAC/security/audit) — largely satisfied incrementally
-  by 1/3/12/13's own permission and audit additions; a dedicated pass
-  hasn't been done. See `docs/security/integration-security.md` for the
-  Phase 3-specific security review.
-- Phase 16/17/18 (Observability / Frontend UX / Deployment detail page)
-  — partially organic (the deployment detail page has accreted Health/
-  Action-Executions/GitHub/Lineage/Timeline sections across phases) but
-  no dedicated pass against `HUB-Expansion.md`'s own suggested structure
-  for that page.
+Every numbered `HUB-Expansion.md` phase is now landed except Phase 2,
+which is resolved by substitution rather than actually pending — see
+`task-track.md`'s Phase 2 entry and ADR-006 decision 4 (entity-reference
+timeline aggregation instead of a formal shared `correlation_id` scheme).

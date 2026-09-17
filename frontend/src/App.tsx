@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutGrid, Ticket, CalendarClock, LogOut, Users, Bell, Menu, X, ShieldCheck, CheckSquare, Workflow, History, Github, Building2, Package, LayoutDashboard, Plug } from 'lucide-react'
+import { LayoutGrid, Ticket, CalendarClock, LogOut, Users, Bell, Menu, X, ShieldCheck, CheckSquare, Workflow, History, Github, Building2, Package, LayoutDashboard, Plug, ListChecks } from 'lucide-react'
 import { useAuthStore } from './stores/auth'
 import api from './lib/api'
 import { cn } from './lib/utils'
@@ -53,19 +53,34 @@ function RequirePermission({ permission, children }: { permission: string; child
   return <>{children}</>
 }
 
+// HUB-Expansion.md Phase 17 — grouped around operational workflows rather
+// than a flat table-per-page list. Deliberately shallow: the doc's own
+// suggested nav nests things like Maintenance > Calendar/Active/History
+// or Support > Tickets/Escalations, but none of those sub-pages exist as
+// distinct features (Maintenance is one page with a status column,
+// there's no Escalations concept) — inventing empty pages just to match
+// the doc's tree literally would violate its OWN "don't add pages merely
+// because a table exists" rule. Only "Fleet" and "Workflows" actually
+// group 2+ real pages; groups here render a header only when a role's
+// permissions leave 2+ of that group's items visible (see SidebarContent
+// below) — see docs/adr/ADR-011-observability-ux-deployment-page.md
+// decision 2 for the reasoning per group.
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, permission: 'dashboard.view' },
-  { to: '/deployments', label: 'Deployments', icon: LayoutGrid, permission: 'deployments.view' },
-  { to: '/customers', label: 'Customers', icon: Building2, permission: 'customers.view' },
-  { to: '/applications', label: 'Applications', icon: Package, permission: 'applications.view' },
+  { to: '/deployments', label: 'Deployments', icon: LayoutGrid, permission: 'deployments.view', group: 'Fleet' },
+  { to: '/customers', label: 'Customers', icon: Building2, permission: 'customers.view', group: 'Fleet' },
+  { to: '/applications', label: 'Applications', icon: Package, permission: 'applications.view', group: 'Fleet' },
   { to: '/tickets', label: 'Support Tickets', icon: Ticket, permission: 'tickets.view' },
   { to: '/maintenance-windows', label: 'Maintenance', icon: CalendarClock, permission: 'maintenance.view' },
-  { to: '/notifications', label: 'Notifications', icon: Bell, permission: 'notifications.view' },
   { to: '/approvals', label: 'Approvals', icon: CheckSquare, permission: 'approvals.view' },
-  { to: '/workflows', label: 'Workflows', icon: Workflow, permission: 'workflows.view' },
   { to: '/github', label: 'GitHub', icon: Github, permission: 'github.view' },
   { to: '/integrations', label: 'Integrations', icon: Plug, permission: 'integrations.view' },
-  { to: '/events', label: 'Events', icon: History, permission: 'events.view' },
+  // Approval Rules previously had a route (/workflow-rules) but NO nav
+  // link at all — a real pre-existing gap this grouping fixes.
+  { to: '/workflows', label: 'Workflows', icon: Workflow, permission: 'workflows.view', group: 'Workflows' },
+  { to: '/workflow-rules', label: 'Approval Rules', icon: ListChecks, permission: 'workflow_rules.view', group: 'Workflows' },
+  { to: '/notifications', label: 'Notifications', icon: Bell, permission: 'notifications.view' },
+  { to: '/events', label: 'Audit / Events', icon: History, permission: 'events.view' },
 ] as const
 
 // Flush left accent bar rather than a filled pill — reads calmer against a
@@ -95,6 +110,17 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
   const initial = user?.full_name?.[0] || user?.username?.[0] || '?'
 
+  const visibleItems = NAV_ITEMS.filter((item) => can(item.permission))
+  const itemGroup = (item: (typeof NAV_ITEMS)[number]): string | undefined => ('group' in item ? item.group : undefined)
+  // A group header renders only above the FIRST visible item of a run of
+  // 2+ consecutive same-group items — a role whose permissions leave just
+  // one item of a group visible sees it as a plain flat item instead.
+  const groupCounts = visibleItems.reduce<Record<string, number>>((acc, item) => {
+    const g = itemGroup(item)
+    if (g) acc[g] = (acc[g] ?? 0) + 1
+    return acc
+  }, {})
+
   return (
     <>
       <div className="flex items-center gap-2.5 px-4 h-16 border-b border-border shrink-0">
@@ -105,12 +131,22 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       </div>
       <nav className="flex-1 overflow-y-auto px-2.5 py-3 space-y-0.5">
-        {NAV_ITEMS.filter((item) => can(item.permission)).map((item) => (
-          <NavLink key={item.to} to={item.to} onClick={onNavigate} className={({ isActive }) => navItemClass(isActive)}>
-            <item.icon size={16} className="shrink-0" />
-            {item.label}
-          </NavLink>
-        ))}
+        {visibleItems.map((item, i) => {
+          const group = itemGroup(item)
+          const prevGroup = i > 0 ? itemGroup(visibleItems[i - 1]) : undefined
+          const showGroupHeader = !!group && groupCounts[group] > 1 && group !== prevGroup
+          return (
+            <div key={item.to}>
+              {showGroupHeader && (
+                <div className="pt-3 pb-1 pl-3 text-[11px] font-semibold uppercase tracking-wide text-muted/70">{group}</div>
+              )}
+              <NavLink to={item.to} onClick={onNavigate} className={({ isActive }) => navItemClass(isActive)}>
+                <item.icon size={16} className="shrink-0" />
+                {item.label}
+              </NavLink>
+            </div>
+          )
+        })}
         {can('staff.view') && (
           <NavLink to="/users" onClick={onNavigate} className={({ isActive }) => navItemClass(isActive)}>
             <Users size={16} className="shrink-0" />

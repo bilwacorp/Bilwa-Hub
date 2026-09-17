@@ -6,12 +6,12 @@ every prior turn, or accidentally redo/undo settled work. `git log
 --oneline` is the authoritative change history; this file is the
 higher-level map of *why* things are where they are and *what's next*.
 
-This file is updated through Phase 11 (Integration Center) — every
+This file is updated through Phase 19 (Audit Requirements) — every
 numbered `HUB-Expansion.md` phase except 2 (subsumed, see its own entry
-below), 14/15/16/17/18/19 (RBAC/security/audit/observability/UX passes),
-and 20 (test suite, done as a Phase-0 pull-forward) is now landed.
-Committed on `main`. Run `git log --oneline` for the exact current HEAD
-— don't trust a hardcoded hash here going stale.
+below) is now landed. Phase 20 (test suite) was done as a Phase-0
+pull-forward, well before Phase 19. Committed on `main`. Run `git log
+--oneline` for the exact current HEAD — don't trust a hardcoded hash
+here going stale.
 
 ## Where to start reading (in this order)
 
@@ -25,8 +25,11 @@ Committed on `main`. Run `git log --oneline` for the exact current HEAD
    `ADR-004-deployment-lineage.md`, `ADR-005-cicd-integration.md`,
    `ADR-006-support-engineering-link.md`,
    `ADR-007-maintenance-lifecycle-and-approvals.md`,
-   `ADR-008-timeline-dashboard-integration-center.md` — the specific
-   design tradeoffs made and why, per phase.
+   `ADR-008-timeline-dashboard-integration-center.md`,
+   `ADR-009-rbac-audit-and-security-review.md`,
+   `ADR-010-audit-requirements.md`,
+   `ADR-011-observability-ux-deployment-page.md` — the specific design
+   tradeoffs made and why, per phase.
 4. `docs/integrations/github.md` — full GitHub integration design.
 5. `docs/security/integration-security.md` — Phase 3's security review.
 
@@ -35,8 +38,9 @@ Committed on `main`. Run `git log --oneline` for the exact current HEAD
 **Phase 0 — Repository audit.** `docs/architecture/current-state.md`.
 Found: zero test coverage anywhere (fixed by Phase 20 below), no generic
 audit log (fixed by Phase 1), no SSRF hardening on
-`deployment_client.py`'s outbound calls (still true — see "Known gaps"),
-the exact "approved but execution failed" bug later fixed in Phase 12/13.
+`Deployment.base_url` used by `deployment_client.py`'s outbound calls
+(fixed by Phase 15 — see ADR-009), the exact "approved but execution
+failed" bug later fixed in Phase 12/13.
 
 **422-toast crash fix** (not a numbered phase, a bug the expansion doc
 flagged). `frontend/src/lib/utils.ts`'s `errorMessage()` is now the one
@@ -68,7 +72,7 @@ done.
 Postgres-backed harness (`conftest.py` — real dedicated test DB
 `bilwacorp_hub_test`, per-test transaction rollback via
 `join_transaction_mode="create_savepoint"`, Casbin enforcer initialized
-once per session). 99 tests as of Phase 11. **Run with:**
+once per session). 123 tests as of Phase 19. **Run with:**
 ```
 cd backend && source .venv/bin/activate && python -m pytest tests/ -v
 ```
@@ -232,6 +236,60 @@ WhatsApp setting is non-empty. Monitoring is a permanent
 `not_configured` placeholder — no monitoring integration exists.
 Frontend: new `/integrations` page.
 
+**Phase 14/15 — RBAC permission audit + security review.** ADR-009. No
+new permissions added to `core/permissions.py` — all twelve of Phase
+14's "potential new permissions" were checked against the existing
+45-permission catalog and either already existed under a different name
+or were deliberately rejected (see ADR-009 decision 1's table before
+assuming any of them is still missing). Phase 15's sixteen-item security
+checklist found two real, previously-flagged gaps and fixed both:
+SSRF hardening on `Deployment.base_url` (`app/core/url_safety.py` —
+two-layer sync format/literal-IP check + async DNS-resolution check,
+wired into `RegisterRequest` and `api/routers/register.py`) and rate
+limiting on the two genuinely public endpoints (`app/core/rate_limit.py`
+— fail-open Redis fixed-window counter, applied to `/register` by caller
+IP and the GitHub webhook by integration id, never to a Casbin-gated
+staff route). Every other checklist item was reviewed and found already
+correct with no code change — see ADR-009 for the item-by-item writeup.
+
+**Phase 19 — Audit requirements.** ADR-010. `api/routers/users.py` and
+`api/routers/rbac.py` had zero `record_event()` calls before this phase
+— now emit ten new event types (`STAFF_*`/`ROLE_*` in
+`event_types.py`) covering create/update/role-change/deactivate/
+reactivate/password-reset for staff and create/rename/delete/
+permissions-updated for roles, each with before/after state in
+`metadata.changes`. New `OperationalEvent.actor_ip` column (migration
+`021_audit_ip_rbac_events.py`) populated via a `contextvars`-based
+request-scoped IP (`app/core/request_context.py` + `main.py`'s
+`client_ip_middleware` reading `X-Real-IP`) — zero changes needed to any
+of the ~30 pre-existing `record_event()` call sites. Audit immutability
+(no PATCH/DELETE anywhere for `OperationalEvent`) was already true by
+omission; verified with a test rather than new code
+(`test_events_router_has_no_write_endpoints`).
+
+**Phase 16/17/18 — Observability / Frontend UX / Deployment detail
+page.** ADR-011. Phase 16 has no page of its own — its seven summary
+fields (heartbeat/health/version/last-deployment/maintenance-state)
+landed inside Phase 18's restructured Overview + Technical sections,
+since building a standalone page would have duplicated data already
+reachable from the detail page. Phase 17's sidebar gained exactly two
+real groups — **Fleet** (Deployments/Customers/Applications) and
+**Workflows** (Workflows/Approval Rules) — not the doc's full suggested
+nested tree (Escalations/Calendar/Engineering sub-pages etc. were
+deliberately not built per the doc's own "don't add pages merely because
+a table exists" rule); a group header only renders when 2+ of that
+group's items are visible to the caller's permissions. Fixed a
+pre-existing bug found while auditing the nav: `ApprovalRulesPage.tsx`
+had a working route with no nav link at all — now reachable via
+Workflows. `DeploymentDetailPage.tsx` restructured into Header (health/
+environment badges + consolidated action row, two new actions: Health
+Check relocated into it, Schedule Maintenance genuinely new) / Overview /
+Software (renamed from Lineage) / Technical (renamed+expanded from Live
+Health Check) / **Support** (new — up to 5 recent tickets) /
+**Maintenance** (new — Active/Upcoming/History) / Approvals (relabeled
+from Action Executions) / Timeline — labeling-and-addition, not a full
+physical doc-order reorder (see ADR-011's explicit tradeoff writeup).
+
 Key things a future phase MUST reuse, not reinvent:
 - `services/crypto.py` for any new encrypted credential.
 - The ONE shared `celery_app` in `services/notifications/tasks.py` —
@@ -256,26 +314,10 @@ unpopulated and is not expected to be the mechanism a future cross-system
 chain uses; follow Phase 6's aggregation pattern instead if another
 "stitch two independently-caused chains together" need comes up.
 
-Every other numbered phase (1, 3-13, 20) is landed as of this tracker's
-last update (Phase 11) — see "Completed phases" above. What's left is
-the cross-cutting/dedicated-pass phases below, none of which are
-blocking anything else:
-
-**Phase 14/15/19 — RBAC/Security/Audit passes.** Largely satisfied
-incrementally by what 1/3/12/13 already added (each phase did its own
-mini security review — see the ADRs and `integration-security.md`). No
-dedicated fleet-wide pass has been done. Known specific gaps still open:
-- `services/deployment_client.py`'s outbound calls still have no SSRF
-  hardening (flagged in Phase 0 audit, never fixed — `base_url` is
-  staff-entered and used directly, no scheme/host allowlist).
-- No rate limiting on HUB's own inbound webhook endpoint (flagged in
-  Phase 3's security review, not fixed — no existing precedent in this
-  codebase for rate-limiting middleware).
-
-**Phase 16/17/18 — Observability / Frontend UX / Deployment detail
-page.** Partially organic (deployment detail page already accreted
-Health/Action-Executions/GitHub sections across phases) but no dedicated
-pass against the doc's suggested structure.
+Every other numbered phase (1, 3-20) is landed as of this tracker's
+last update (Phase 19) — see "Completed phases" above. Phase 2 above is
+the only remaining unaddressed phase reference in the whole doc, and
+it's resolved-by-substitution, not actually pending work.
 
 ## Known limitations carried forward (see prior phase docs for full detail)
 

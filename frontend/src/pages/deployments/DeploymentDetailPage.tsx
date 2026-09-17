@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
@@ -15,7 +15,8 @@ import { Badge } from '../../components/ui/Badge'
 import { EventTimeline } from '../../components/ui/EventTimeline'
 import type {
   Application, Customer, Deployment, DeploymentActionExecution, DeploymentEnvironment, DeploymentGitHubInfo,
-  OperationalEvent, StaffOption,
+  MaintenanceMode, MaintenanceWindow, MaintenanceWindowListResponse, OperationalEvent, StaffOption, SupportTicket,
+  SupportTicketListResponse,
 } from '../../types'
 
 // Money actions (renew/suspend/change-plan) run immediately, unless a
@@ -65,6 +66,20 @@ const EXECUTION_STATUS_VARIANT: Record<DeploymentActionExecution['status'], 'amb
   failed: 'red',
 }
 
+// HUB-Expansion.md Phase 16/18 — the header's at-a-glance health badge.
+// Mirrors DeploymentsListPage.tsx's healthDot() (not shared/extracted — a
+// small, page-local helper each list/detail view already keeps its own
+// copy of, same as e.g. this file's own MODE_BADGE-style constants).
+function healthBadge(d: Deployment): { variant: 'green' | 'amber' | 'red' | 'gray'; label: string } {
+  switch (d.derived_status) {
+    case 'maintenance': return { variant: 'amber', label: 'Under maintenance' }
+    case 'offline': return { variant: 'red', label: 'Offline' }
+    case 'stale': return { variant: 'amber', label: 'Stale' }
+    case 'online': return { variant: 'green', label: 'Healthy' }
+    default: return { variant: 'gray', label: 'No heartbeat yet' }
+  }
+}
+
 // action_key is the workflow definition key ("deployment_renew") — strip
 // the "deployment_" prefix and underscore-case for a human label.
 function actionLabel(actionKey: string): string {
@@ -73,6 +88,7 @@ function actionLabel(actionKey: string): string {
 
 export default function DeploymentDetailPage() {
   const { deploymentId } = useParams<{ deploymentId: string }>()
+  const navigate = useNavigate()
   const qc = useQueryClient()
   const can = useAuthStore((s) => s.can)
 
@@ -195,6 +211,53 @@ export default function DeploymentDetailPage() {
     queryFn: () => api.get<OperationalEvent[]>(`/deployments/${deploymentId}/timeline`).then((r) => r.data),
   })
 
+  // HUB-Expansion.md Phase 18 — Support section: this deployment's own
+  // tickets. /tickets already supports a deployment_id filter (used by
+  // notification "View ticket" links) — no new backend endpoint needed.
+  const canViewTickets = can('tickets.view')
+  const { data: ticketsResp } = useQuery({
+    queryKey: ['deployment-tickets', deploymentId],
+    queryFn: () => api.get<SupportTicketListResponse>('/tickets', { params: { deployment_id: deploymentId } }).then((r) => r.data),
+    enabled: canViewTickets,
+  })
+  const openTickets = (ticketsResp?.items ?? []).filter((t: SupportTicket) => t.status === 'open' || t.status === 'in_progress')
+
+  // HUB-Expansion.md Phase 18 — Maintenance section: windows affecting
+  // this deployment specifically, or fleet-wide. GET /maintenance-windows
+  // has no deployment_id filter (the standalone page doesn't need one),
+  // so this filters client-side — the fleet-wide window count is small
+  // enough that this isn't a real cost.
+  const canViewMaintenance = can('maintenance.view')
+  const { data: windowsResp } = useQuery({
+    queryKey: ['maintenance-windows'],
+    queryFn: () => api.get<MaintenanceWindowListResponse>('/maintenance-windows').then((r) => r.data),
+    enabled: canViewMaintenance,
+  })
+  const relevantWindows = (windowsResp?.items ?? []).filter((w: MaintenanceWindow) => w.deployment_id === null || w.deployment_id === deploymentId)
+  const activeWindows = relevantWindows.filter((w) => w.status === 'in_progress')
+  const upcomingWindows = relevantWindows.filter((w) => ['draft', 'approval_required', 'approved', 'planned', 'notification'].includes(w.status))
+  const pastWindows = relevantWindows.filter((w) => ['completed', 'failed', 'cancelled'].includes(w.status))
+    .sort((a, b) => new Date(b.scheduled_start).getTime() - new Date(a.scheduled_start).getTime())
+
+  const [showScheduleMaintenance, setShowScheduleMaintenance] = useState(false)
+  const scheduleMaintenanceForm = useForm<{ scheduled_start: string; scheduled_end: string; description: string; mode: MaintenanceMode }>({
+    defaultValues: { mode: 'banner' },
+  })
+  const scheduleMaintenanceMutation = useMutation({
+    mutationFn: (v: { scheduled_start: string; scheduled_end: string; description: string; mode: MaintenanceMode }) =>
+      api.post('/maintenance-windows', {
+        deployment_id: deploymentId, description: v.description, mode: v.mode,
+        scheduled_start: new Date(v.scheduled_start).toISOString(), scheduled_end: new Date(v.scheduled_end).toISOString(),
+      }),
+    onSuccess: () => {
+      toast.success('Maintenance window created')
+      setShowScheduleMaintenance(false)
+      scheduleMaintenanceForm.reset({ mode: 'banner' })
+      qc.invalidateQueries({ queryKey: ['maintenance-windows'] })
+    },
+    onError: (e) => toast.error(errMsg(e, 'Failed to schedule maintenance')),
+  })
+
   // HUB-Expansion.md Phase 4 — lineage (Customer/Application/Environment/
   // current release). Edit affordances are gated by deployments.manage_lineage,
   // which is a separate permission from deployments.view.
@@ -242,15 +305,43 @@ export default function DeploymentDetailPage() {
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1 className="text-xl font-semibold text-text">{d.client_name}</h1>
+        {/* HUB-Expansion.md Phase 16/18 — the header now answers "is this
+            deployment healthy right now" at a glance, without scrolling
+            to the Technical section's on-demand check. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="text-xl font-semibold text-text">{d.client_name}</h1>
+          <Badge variant={d.environment === 'production' ? 'blue' : 'gray'} className="capitalize">{d.environment}</Badge>
+          <Badge variant={healthBadge(d).variant}>{healthBadge(d).label}</Badge>
+          {(snap?.app_version ?? d.current_release?.version) && (
+            <span className="text-sm text-muted">v{snap?.app_version ?? d.current_release?.version}</span>
+          )}
+        </div>
         <p className="text-sm text-muted font-mono">{d.slug} · {d.base_url ?? 'not yet registered'}</p>
+      </div>
+
+      {/* HUB-Expansion.md Phase 18 — HEADER's suggested action row:
+          Renew/Suspend/Change Plan/Health Check/Schedule Maintenance,
+          all in one place instead of scattered across sections. */}
+      <div className="flex flex-wrap gap-2">
+        {can('deployments.renew') && <Button variant="secondary" onClick={() => setShowRenew(true)}>Renew</Button>}
+        {can('deployments.change_plan') && <Button variant="secondary" onClick={() => setShowChangePlan(true)}>Change Plan</Button>}
+        {can('deployments.extend_expiry') && <Button variant="secondary" onClick={() => setShowExtend(true)}>Extend Expiry</Button>}
+        {can('deployments.check_health') && (
+          <Button variant="secondary" icon={<RotateCw size={13} />} loading={healthCheckMutation.isPending} onClick={() => healthCheckMutation.mutate()}>
+            Health Check
+          </Button>
+        )}
+        {canViewMaintenance && can('maintenance.create') && (
+          <Button variant="secondary" onClick={() => setShowScheduleMaintenance(true)}>Schedule Maintenance</Button>
+        )}
+        {can('deployments.suspend') && <Button variant="danger" onClick={() => setShowSuspend(true)}>Suspend</Button>}
       </div>
 
       {/* HUB-Expansion.md Phase 4 — lineage: Customer/Application/
           Environment/current version+release+commit+repository. */}
       <div className="bg-surface border border-border rounded-lg p-4">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-text">Lineage</h3>
+          <h3 className="text-sm font-semibold text-text">Software</h3>
           <div className="flex gap-2">
             {canManageLineage && <Button size="sm" variant="ghost" onClick={() => setShowRecordRelease(true)}>Record Release</Button>}
             {canManageLineage && <Button size="sm" variant="secondary" onClick={openLineageEdit}>Edit</Button>}
@@ -342,9 +433,13 @@ export default function DeploymentDetailPage() {
         </div>
       )}
 
+      {/* HUB-Expansion.md Phase 18 — "Overview": subscription/plan/expiry/
+          heartbeat at a glance (Usage sits right below this, same
+          section conceptually). */}
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted -mb-2">Overview</h2>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="bg-surface border border-border rounded-lg p-4">
-          <div className="text-xs text-muted mb-1">Status</div>
+          <div className="text-xs text-muted mb-1">Subscription</div>
           <Badge variant={d.status === 'active' ? 'green' : d.status === 'suspended' ? 'red' : 'gray'}>{d.status}</Badge>
         </div>
         <div className="bg-surface border border-border rounded-lg p-4">
@@ -361,9 +456,14 @@ export default function DeploymentDetailPage() {
         </div>
       </div>
 
+      {/* HUB-Expansion.md Phase 16/18 — "Technical": deployment URL, live
+          API status, last heartbeat, integration status all in one place
+          (the last two already exist elsewhere on this page — Overview's
+          stat grid and the GitHub panel below — but a summary line here
+          means a staff member doesn't have to hunt for them). */}
       <div className="bg-surface border border-border rounded-lg p-4">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-text">Live Health Check</h3>
+          <h3 className="text-sm font-semibold text-text">Technical</h3>
           {can('deployments.check_health') && (
             <Button
               size="sm" variant="secondary"
@@ -375,6 +475,20 @@ export default function DeploymentDetailPage() {
             </Button>
           )}
         </div>
+        <div className="space-y-2 text-sm mb-3">
+          <div className="flex items-center justify-between">
+            <span className="text-muted">Deployment URL</span>
+            <span className="font-mono text-xs">{d.base_url ?? 'not yet registered'}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted">Last heartbeat</span>
+            <span>{snap ? formatDate(snap.received_at) : '—'}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted">GitHub integration</span>
+            <span>{githubInfo && githubInfo.repositories.length > 0 ? `Linked (${githubInfo.repositories.length} repo${githubInfo.repositories.length === 1 ? '' : 's'})` : 'Not linked'}</span>
+          </div>
+        </div>
         {health ? (
           <div className="space-y-2">
             <HealthRow label="API Server" ok={health.api} latencyMs={health.api_latency_ms} />
@@ -383,22 +497,21 @@ export default function DeploymentDetailPage() {
           </div>
         ) : (
           <p className="text-sm text-muted">
-            Probes this deployment's own /api/health right now — independent of the Health dot above,
-            which only reflects the last heartbeat (up to ~2h old).
+            "Check now" probes this deployment's own /api/health right now — independent of the Health badge in
+            the header above, which only reflects the last heartbeat (up to ~2h old).
           </p>
         )}
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {can('deployments.renew') && <Button variant="secondary" onClick={() => setShowRenew(true)}>Renew</Button>}
-        {can('deployments.change_plan') && <Button variant="secondary" onClick={() => setShowChangePlan(true)}>Change Plan</Button>}
-        {can('deployments.extend_expiry') && <Button variant="secondary" onClick={() => setShowExtend(true)}>Extend Expiry</Button>}
-        {can('deployments.suspend') && <Button variant="danger" onClick={() => setShowSuspend(true)}>Suspend</Button>}
-      </div>
-
+      {/* HUB-Expansion.md Phase 18's "Approvals: Pending / Recent" — this
+          IS that section for deployment actions (renew/suspend/change
+          plan). A separate lookup of maintenance-window approval
+          instances would duplicate what the Maintenance section above
+          already shows via each window's own status badge
+          (approval_required/approved), so it isn't repeated here too. */}
       {executions && executions.length > 0 && (
         <div className="bg-surface border border-border rounded-lg p-4">
-          <h3 className="text-sm font-semibold text-text mb-1">Action Executions</h3>
+          <h3 className="text-sm font-semibold text-text mb-1">Approvals — Action Executions</h3>
           <p className="text-xs text-muted mb-3">
             An approved renew/suspend/change-plan action runs against the deployment separately from the approval
             itself — a row here can show "failed" even though its approval shows "approved."
@@ -491,6 +604,71 @@ export default function DeploymentDetailPage() {
         </div>
       )}
 
+      {/* HUB-Expansion.md Phase 18 — Support: this deployment's own
+          tickets (CLAUDE.md previously called this out explicitly: "the
+          deployment detail page doesn't show tickets" — no longer true). */}
+      {canViewTickets && (
+        <div className="bg-surface border border-border rounded-lg p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-text">Support</h3>
+            <span className="text-xs text-muted">{openTickets.length} open</span>
+          </div>
+          <div className="space-y-2">
+            {(ticketsResp?.items ?? []).slice(0, 5).map((t: SupportTicket) => (
+              <div
+                key={t.id} className="flex items-center justify-between text-sm cursor-pointer hover:text-accent"
+                onClick={() => navigate(`/tickets/${t.id}`)}
+              >
+                <span className="truncate">{t.subject}</span>
+                <Badge variant={t.status === 'open' ? 'amber' : t.status === 'in_progress' ? 'blue' : 'gray'} className="shrink-0 ml-2">
+                  {t.status.replace('_', ' ')}
+                </Badge>
+              </div>
+            ))}
+            {(ticketsResp?.items ?? []).length === 0 && <p className="text-sm text-muted">No tickets from this deployment yet.</p>}
+          </div>
+        </div>
+      )}
+
+      {/* HUB-Expansion.md Phase 18 — Maintenance: windows affecting this
+          deployment, or fleet-wide, bucketed by upcoming/active/history. */}
+      {canViewMaintenance && (
+        <div className="bg-surface border border-border rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-text mb-3">Maintenance</h3>
+          {activeWindows.length > 0 && (
+            <div className="mb-3">
+              <p className="text-xs text-muted mb-1">Active</p>
+              {activeWindows.map((w) => (
+                <div key={w.id} className="text-sm flex items-center justify-between">
+                  <span>{w.description}</span>
+                  <Badge variant="amber">in progress</Badge>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="mb-3">
+            <p className="text-xs text-muted mb-1">Upcoming</p>
+            {upcomingWindows.map((w) => (
+              <div key={w.id} className="text-sm flex items-center justify-between">
+                <span>{w.description} — {formatDate(w.scheduled_start)}</span>
+                <Badge variant={w.status === 'approval_required' ? 'amber' : 'blue'}>{w.status.replace('_', ' ')}</Badge>
+              </div>
+            ))}
+            {upcomingWindows.length === 0 && <p className="text-sm text-muted">None scheduled.</p>}
+          </div>
+          <div>
+            <p className="text-xs text-muted mb-1">History</p>
+            {pastWindows.slice(0, 5).map((w) => (
+              <div key={w.id} className="text-sm flex items-center justify-between text-muted">
+                <span>{w.description} — {formatDate(w.scheduled_start)}</span>
+                <Badge variant={w.status === 'completed' ? 'green' : w.status === 'failed' ? 'red' : 'gray'}>{w.status}</Badge>
+              </div>
+            ))}
+            {pastWindows.length === 0 && <p className="text-sm text-muted">No past windows.</p>}
+          </div>
+        </div>
+      )}
+
       <div className="bg-surface border border-border rounded-lg p-4">
         <h3 className="text-sm font-semibold text-text mb-3">Pending Renewal / Upgrade Requests</h3>
         <div className="space-y-3">
@@ -542,6 +720,32 @@ export default function DeploymentDetailPage() {
       <Modal open={showExtend} onClose={() => setShowExtend(false)} title="Extend Expiry" size="sm"
         footer={<><Button variant="secondary" onClick={() => setShowExtend(false)}>Cancel</Button><Button loading={extendMutation.isPending} onClick={extendForm.handleSubmit((v) => extendMutation.mutate(v))}>Extend</Button></>}>
         <Input type="date" label="New expiry date" {...extendForm.register('new_expiry_date', { required: true })} />
+      </Modal>
+
+      <Modal
+        open={showScheduleMaintenance} onClose={() => setShowScheduleMaintenance(false)} title="Schedule Maintenance" size="sm"
+        footer={<>
+          <Button variant="secondary" onClick={() => setShowScheduleMaintenance(false)}>Cancel</Button>
+          <Button loading={scheduleMaintenanceMutation.isPending} onClick={scheduleMaintenanceForm.handleSubmit((v) => scheduleMaintenanceMutation.mutate(v))}>
+            Create
+          </Button>
+        </>}
+      >
+        <form className="space-y-4">
+          <Input type="datetime-local" label="Start" {...scheduleMaintenanceForm.register('scheduled_start', { required: true })} />
+          <Input type="datetime-local" label="End" {...scheduleMaintenanceForm.register('scheduled_end', { required: true })} />
+          <Input label="Description" placeholder="e.g. Database upgrade" {...scheduleMaintenanceForm.register('description', { required: true })} />
+          <Select
+            label="Enforcement"
+            options={[
+              { value: 'banner', label: 'Banner only' },
+              { value: 'read_only', label: 'Read-only' },
+              { value: 'lockout', label: 'Lockout (needs approval)' },
+            ]}
+            {...scheduleMaintenanceForm.register('mode')}
+          />
+          <p className="text-xs text-muted">Scoped to {d.client_name}. Lockout-mode windows require admin approval before they're scheduled.</p>
+        </form>
       </Modal>
 
       <Modal open={showLineageEdit} onClose={() => setShowLineageEdit(false)} title="Edit Lineage" size="sm"
