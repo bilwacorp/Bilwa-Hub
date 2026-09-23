@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { API_BASE } from '../../lib/api'
 import { Button } from '../../components/ui/Button'
@@ -11,9 +12,22 @@ const ERROR_MESSAGES: Record<string, string> = {
   sso_failed: 'Sign-in failed. Please try again.',
 }
 
+function goToAuthentik() {
+  window.location.href = `${API_BASE}/auth/login`
+}
+
 export default function LoginPage() {
   const [searchParams] = useSearchParams()
   const error = searchParams.get('error')
+
+  // Auto-redirect straight to Authentik on a plain, error-free visit to
+  // /login — skips the click for the common case. Never auto-redirects
+  // when ?error= is present (a bounce back from /auth/callback), or the
+  // error message would flash for a frame and then loop the visitor
+  // straight back into Authentik with no way to ever read it.
+  useEffect(() => {
+    if (!error) goToAuthentik()
+  }, [error])
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
@@ -29,7 +43,7 @@ export default function LoginPage() {
               {ERROR_MESSAGES[error] ?? ERROR_MESSAGES.sso_failed}
             </p>
           )}
-          <Button className="w-full" onClick={() => { window.location.href = `${API_BASE}/auth/login` }}>
+          <Button className="w-full" onClick={goToAuthentik}>
             Sign in with Authentik
           </Button>
         </div>
