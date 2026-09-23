@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { API_BASE } from '../../lib/api'
 import { Button } from '../../components/ui/Button'
@@ -19,14 +19,29 @@ function goToAuthentik() {
 export default function LoginPage() {
   const [searchParams] = useSearchParams()
   const error = searchParams.get('error')
+  const [justLoggedOut, setJustLoggedOut] = useState(false)
 
   // Auto-redirect straight to Authentik on a plain, error-free visit to
   // /login — skips the click for the common case. Never auto-redirects
   // when ?error= is present (a bounce back from /auth/callback), or the
   // error message would flash for a frame and then loop the visitor
-  // straight back into Authentik with no way to ever read it.
+  // straight back into Authentik with no way to ever read it. Also never
+  // auto-redirects right after an intentional logout (App.tsx's
+  // handleLogout sets this sessionStorage flag before navigating away) —
+  // Authentik's own SSO session commonly outlives this hub's, so an
+  // immediate auto-redirect would silently re-authenticate the user with
+  // no credential prompt, making logout look broken (ADR-012 decision 7).
   useEffect(() => {
-    if (!error) goToAuthentik()
+    let loggedOut = false
+    try {
+      loggedOut = sessionStorage.getItem('hub_just_logged_out') === '1'
+      sessionStorage.removeItem('hub_just_logged_out')
+    } catch { /* private mode etc. */ }
+    if (loggedOut) {
+      setJustLoggedOut(true)
+    } else if (!error) {
+      goToAuthentik()
+    }
   }, [error])
 
   return (
@@ -42,6 +57,9 @@ export default function LoginPage() {
             <p className="text-sm text-red-600 mb-4">
               {ERROR_MESSAGES[error] ?? ERROR_MESSAGES.sso_failed}
             </p>
+          )}
+          {justLoggedOut && !error && (
+            <p className="text-sm text-muted mb-4">You've been signed out.</p>
           )}
           <Button className="w-full" onClick={goToAuthentik}>
             Sign in with Authentik

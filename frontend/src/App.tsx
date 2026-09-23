@@ -104,6 +104,14 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const handleLogout = async () => {
     const { data } = await api.post('/auth/logout')
     clearAuth()
+    // Authentik's RP-initiated logout ends this hub's own OIDC session, but
+    // an org's broader Authentik SSO session commonly survives it — so
+    // /login's auto-redirect (LoginPage.tsx) would otherwise walk the user
+    // straight back into a still-live Authentik session with no credential
+    // prompt, making logout look like it did nothing. This flag tells
+    // LoginPage to skip that one auto-redirect and show a real signed-out
+    // state instead (see docs/adr/ADR-012-authentik-sso.md decision 7).
+    try { sessionStorage.setItem('hub_just_logged_out', '1') } catch { /* private mode etc. */ }
     // Full redirect through Authentik's end-session endpoint when one's
     // available, so the SSO session actually ends too — otherwise a staff
     // member could click "Sign in with Authentik" right back in without a
