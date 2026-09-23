@@ -12,7 +12,6 @@ DEFAULT_WHATSAPP_PROVIDER = "whatsapp"
 TEMPLATE_SUPPORT_TICKET_RAISED = "support_ticket_raised"
 TEMPLATE_SUBSCRIPTION_REQUEST_RAISED = "subscription_request_raised"
 TEMPLATE_SUBSCRIPTION_EXPIRING = "subscription_expiring"
-TEMPLATE_PASSWORD_RESET = "password_reset"
 # app/workflow, app/approvals — sent to each candidate approver when a new
 # WorkflowTask is created (see app/workflow/executor.py's
 # _notify_candidate_approvers).
@@ -24,9 +23,9 @@ TEMPLATE_APPROVAL_REQUESTED = "approval_requested"
 TEMPLATE_BASE_LAYOUT = "base"
 
 # Fields that must never be written to NotificationLog.payload or logged.
-# "reset_url" is the one this hub actually sends (TEMPLATE_PASSWORD_RESET) —
-# it embeds a live one-time password-reset token, so the *key* it's passed
-# under here must be redacted even though the value is a URL, not a bare
-# token string. The rest are carried over from PoultryPro-CBF's notifications
-# package for the same defense-in-depth in case a future template needs them.
+# None of these are sent by any template this hub currently has (self-
+# service password reset was removed when login moved to Authentik SSO —
+# see docs/adr/ADR-012-authentik-sso.md) — carried over from PoultryPro-
+# CBF's notifications package as defense-in-depth in case a future
+# template needs one of them.
 SENSITIVE_CONTEXT_KEYS = {"password", "otp_code", "otp", "token", "reset_token", "reset_url", "secret"}

@@ -41,14 +41,20 @@ def _utc_iso(dt: Optional[datetime]) -> Optional[str]:
 
 
 # ── auth ─────────────────────────────────────────────────────────────────
-
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
+# Staff login is Authentik OIDC only (api/routers/auth.py,
+# services/oidc_client.py) — no password request/response shapes here,
+# since the browser never posts credentials to this app directly.
 
 class TokenResponse(BaseModel):
     expires_in: int
+
+
+class LogoutResponse(BaseModel):
+    status: str
+    # Set when Authentik's discovery document has an end_session_endpoint —
+    # the frontend does a full browser redirect here (not an axios call) to
+    # also end the Authentik SSO session, not just this hub's local cookie.
+    sso_logout_url: Optional[str] = None
 
 
 # A role name — roles are dynamic/DB-backed now (see Role in app/models.py
@@ -80,11 +86,13 @@ class UserOut(BaseModel):
 class StaffUserCreate(BaseModel):
     username: str
     full_name: Optional[str] = None
-    email: Optional[str] = None
+    # Required, unlike StaffUserUpdate's optional email — a staff row with
+    # no email can never sign in via Authentik (api/routers/auth.py matches
+    # solely on this field), so admin-create must not allow one through.
+    email: str
     # E.164-ish WhatsApp recipient (see core/phone.py) — optional; a staff
     # user with no phone on file simply never gets a WhatsApp alert.
     phone: Optional[str] = None
-    password: str
     role: StaffRole
 
 
@@ -112,24 +120,6 @@ class StaffUserOut(BaseModel):
 class StaffUserListResponse(BaseModel):
     total: int
     items: List[StaffUserOut]
-
-
-class PasswordResetRequest(BaseModel):
-    new_password: str
-
-
-# ── self-service forgot password (api/routers/auth.py) ─────────────────
-# Deliberately separate from PasswordResetRequest above, which is the
-# admin-resets-another-user shape (POST /users/{id}/reset-password) — this
-# pair is public/unauthenticated.
-
-class ForgotPasswordRequest(BaseModel):
-    username: str
-
-
-class ResetPasswordConfirmRequest(BaseModel):
-    token: str
-    new_password: str
 
 
 # ── registration / ingest ───────────────────────────────────────────────

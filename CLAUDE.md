@@ -98,14 +98,19 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 ```
 
 ### Seeded login
-`alembic/versions/002_seed_admin.py` creates one staff account:
-`admin` / `ChangeMe@2026`. Additional staff (either role) are created from
-the "Staff" page (admin-only) once logged in — see "The permission model"
-above. Still no *self*-service password-change endpoint — an admin resets
-another user's password via that page's "Reset password" action; to
-change the seeded admin's own password before a second admin exists, edit
-`users.hashed_password` (bcrypt) directly, or re-seed against a fresh DB
-with a different constant.
+Staff sign in via Authentik SSO only — see
+`docs/adr/ADR-012-authentik-sso.md` (this is separate from "The
+two-credential design" below, which covers hub<->deployment machine
+auth, not staff login). `alembic/versions/002_seed_admin.py`
+creates one staff account (`username=admin`) but sets no `email` on it —
+**before cutover on any real deployment, an admin must set a matching
+`email`** on that row (or any other active `User` row) to a real Authentik
+identity's email, via direct DB access (there's no UI for editing your own
+row before you can log in at all). Without this step, no one can sign in
+post-cutover. Additional staff are created from the "Staff" page
+(admin-only) once logged in — see "The permission model" above; a
+`StaffUserCreate` requires `email` (matched against Authentik's id_token
+at login) but has no password field at all.
 
 ---
 
@@ -146,6 +151,12 @@ services/deployment_scope.py
 services/crypto.py    Fernet encrypt/decrypt for Deployment.action_key_encrypted — mirrors
                       PoultryOS-CBP's User.totp_secret_encrypted pattern (reversible storage
                       is the exception, not the rule; see "Two credentials" below).
+services/oidc_client.py
+                      Authentik OIDC client for staff login (api/routers/auth.py) — see
+                      docs/adr/ADR-012-authentik-sso.md. Discovery-document + JWKS caching
+                      (httpx), Authorization Code + PKCE URL building, code<->token
+                      exchange, id_token verification (python-jose against the matched
+                      JWKS key), and RP-initiated logout URL building.
 services/deployment_client.py
                       httpx wrapper for hub -> deployment calls (renew/suspend/change-plan/
                       extend-expiry/review-request). Decrypts the target deployment's
@@ -178,15 +189,18 @@ services/notification_triggers.py
                       model") — to whichever of email/WhatsApp each recipient has on file
                       (User.email / User.phone).
 api/routers/
-  auth.py             login/logout/refresh/me — MFA, phone/WhatsApp OTP, and mobile
-                      refresh-token pairing all dropped (ported subset only). Self-service
-                      forgot-password/reset-password (public, unauthenticated) landed later —
-                      hash-only reset token (users.password_reset_token_hash, 30min TTL,
-                      single-use), always 204 regardless of whether the username/email
-                      exists so the endpoint can't be used to enumerate staff accounts.
-                      Emails via services/notifications (TEMPLATE_PASSWORD_RESET) — the
-                      reset_url context key is in SENSITIVE_CONTEXT_KEYS so the live token
-                      never lands in NotificationLog.payload.
+  auth.py             Staff login is Authentik OIDC SSO — see
+                      docs/adr/ADR-012-authentik-sso.md. GET /login redirects to Authentik
+                      (state/nonce/PKCE in a short-lived sso_flow cookie); GET /callback
+                      exchanges the code, verifies the id_token (services/oidc_client.py),
+                      matches its email claim against an existing active User (no
+                      auto-provisioning — an admin must have pre-created the row), then
+                      mints this hub's own session JWT/cookie exactly as before. POST
+                      /logout does RP-initiated logout (a second short-lived sso_id_token
+                      cookie + Authentik's end_session_endpoint) so the SSO session ends
+                      too, not just the local cookie. POST /refresh and GET /me are
+                      unchanged from the old password-based flow. No password login,
+                      forgot-password, or reset-password endpoints exist anymore.
   register.py         POST /register — public, single-use registration_token auth, not JWT
   ingest.py            POST /ingest/heartbeat, POST /ingest/support-ticket — api_key bearer
                       auth (hash-compared against Deployment.api_key_hash)
@@ -206,9 +220,12 @@ api/routers/
                       caller's assigned set, or they hold tickets.view_all).
   maintenance.py        maintenance.view/view_all/create/update/delete — same scoping,
                       except fleet-wide windows (deployment_id IS NULL) are never scoped.
-  users.py              staff.view/create/update/reset_password: staff account CRUD
-                      (deactivate, not hard delete — MaintenanceWindow.created_by FKs to
-                      users.id) + role assignment. Guards against self-lockout (can't
+  users.py              staff.view/create/update: staff account CRUD (deactivate, not hard
+                      delete — MaintenanceWindow.created_by FKs to users.id) + role
+                      assignment. No reset_password permission/endpoint — staff sign in via
+                      Authentik SSO (docs/adr/ADR-012-authentik-sso.md), there's no password
+                      to reset. StaffUserCreate requires email (matched against Authentik's
+                      id_token at login). Guards against self-lockout (can't
                       deactivate/change your own role) and against dropping the last
                       active staff.update holder.
   notifications.py      notifications.view/resend/delete/test_send: notification history
@@ -257,12 +274,23 @@ mobile equivalent here is a plain slide-in drawer instead.
 
 ```
 lib/api.ts, lib/utils.ts     axios instance + cn()/formatDate() etc., mirrors PoultryOS-CBP
-components/ui/                Button, Input, Select, Modal, Badge, DataTable, Tabs, Card,
-                              PasswordInput — Button/Input/Select/Modal/Badge/Tabs/DataTable
-                              copied verbatim from PoultryOS-CBP's frontend/src/components/ui/
-                              (generic, no product-specific logic); Card ported from
-                              PoultryPro-CBF's equivalent; PasswordInput is hub-specific
-pages/auth/LoginPage.tsx
+components/ui/                Button, Input, Select, Modal, Badge, DataTable, Tabs, Card —
+                              Button/Input/Select/Modal/Badge/Tabs/DataTable copied verbatim
+                              from PoultryOS-CBP's frontend/src/components/ui/ (generic, no
+                              product-specific logic); Card ported from PoultryPro-CBF's
+                              equivalent. No PasswordInput — staff sign in via Authentik SSO,
+                              there's no password field anywhere in this app.
+lib/landing.ts                landingPathFor(permissions) — the first page a signed-in user
+                              actually has permission for (same order as App.tsx's sidebar
+                              nav); shared by LoginPage and SsoCompletePage below.
+pages/auth/LoginPage.tsx      A single "Sign in with Authentik" button — a real browser
+                              navigation (window.location.href) to GET /auth/login, never an
+                              axios call, since the browser must follow the redirect chain
+                              out to Authentik and back. Shows a friendly message for
+                              ?error=no_account / ?error=sso_failed.
+pages/auth/SsoCompletePage.tsx  Where GET /auth/callback's success redirect lands. Calls
+                              GET /auth/me once, populates the auth store, and routes to
+                              landingPathFor(...) — see docs/adr/ADR-012-authentik-sso.md.
 pages/deployments/DeploymentsListPage.tsx    client name, status, plan, expiry, last-
                                               heartbeat health indicator
 pages/deployments/DeploymentDetailPage.tsx   latest snapshot (including pending_requests
@@ -275,8 +303,10 @@ pages/deployments/DeploymentDetailPage.tsx   latest snapshot (including pending_
 pages/tickets/SupportTicketsPage.tsx         fleet-wide ticket table + status update
 pages/maintenance/MaintenanceWindowsPage.tsx list + create/edit, no automation
 pages/users/StaffUsersPage.tsx               staff.manage: staff table (role/active inline
-                                              editors, reset-password) — role select is
-                                              populated from GET /rbac/roles, not hardcoded
+                                              editors) — role select is populated from GET
+                                              /rbac/roles, not hardcoded. No reset-password
+                                              action (Authentik SSO, no password to reset);
+                                              create-staff form requires email.
 pages/notifications/NotificationsPage.tsx    notification history table (filter by status/
                                               channel/recipient), resend/delete, test-email/
                                               test-whatsapp buttons
@@ -325,17 +355,21 @@ field — not by a hardcoded role name (see "The permission model" above).
 
 ### The permission model (roles, permission catalog, row-level visibility)
 
-45 Casbin permissions, all defined in `core/permissions.py`'s
+44 Casbin permissions, all defined in `core/permissions.py`'s
 `ALL_PERMISSIONS` — one per *action*, not one per router. E.g.
 `deployments.renew`, `deployments.suspend`, `deployments.check_health`,
 `deployments.assign_staff` are four separate permissions a role can hold
 independently, gated per-route (`Depends(require_permission(*PERM))` on
 each route function, not one blanket `APIRouter(dependencies=[...])`).
 Full resource list: `deployments` (10 actions incl. `view`/`view_all`),
-`tickets` (3), `maintenance` (5), `notifications` (4), `staff` (4), `rbac`
-(2 — `view`/`manage`), `workflows` (6), `workflow_rules` (5),
-`workflow_instances` (2), `approvals` (4 — see "The workflow & approval
-engine" below for what each of these seventeen gates).
+`tickets` (3), `maintenance` (5), `notifications` (4), `staff` (3 — no
+`reset_password`, staff sign in via Authentik SSO, see docs/adr/ADR-012-
+authentik-sso.md), `rbac` (2 — `view`/`manage`), `workflows` (6),
+`workflow_rules` (5), `workflow_instances` (2), `approvals` (4 — see "The
+workflow & approval engine" below for what each of these seventeen gates).
+(Several later additions — `github`, `events`, `dashboard`, `integrations`,
+`customers`, `applications` — aren't reflected in this count; see
+`core/permissions.py` for the live catalog.)
 
 - **`Role`** (`app/models.py`) — dynamic, admin-creatable role *metadata*
   (name, description, `is_system`). `is_system=True` on the two seeded
@@ -546,7 +580,8 @@ lives in a Celery-beat task on the *deployment* side
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | Postgres, async driver |
-| `SECRET_KEY` | JWT signing key (staff login) |
+| `SECRET_KEY` | Signs this hub's own session JWT/cookie, minted after a successful Authentik SSO login (staff never authenticate against this key directly) |
+| `AUTHENTIK_ISSUER` / `AUTHENTIK_CLIENT_ID` / `AUTHENTIK_CLIENT_SECRET` / `AUTHENTIK_REDIRECT_URI` | **Required — no fallback.** Staff login is Authentik OIDC only; see `docs/adr/ADR-012-authentik-sso.md`. Contrast with `GITHUB_APP_*` below, which is genuinely optional |
 | `HUB_ENCRYPTION_KEY` | **Required.** Fernet key for `action_key` encryption — the hub cannot run its inbound-action feature without it |
 | `REDIS_URL` | Casbin cross-worker policy sync (`core/casbin_watcher.py`) — optional, degrades gracefully without it |
 | `BACKEND_CORS_ORIGINS` | This hub's own frontend origin(s) |

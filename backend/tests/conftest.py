@@ -40,6 +40,13 @@ _TEST_DB_URL = f"postgresql+asyncpg://gopalsmac@localhost:5432/{TEST_DB_NAME}"
 # builds its engine from that value immediately.
 os.environ["DATABASE_URL"] = _TEST_DB_URL
 os.environ.setdefault("DB_SSL_MODE", "disable")
+# Required Settings fields with no default (app/core/config.py) — no test
+# ever drives a live Authentik round-trip (see as_user() below), so these
+# just need to be non-empty strings for Settings() to construct.
+os.environ.setdefault("AUTHENTIK_ISSUER", "http://authentik.invalid/application/o/test/")
+os.environ.setdefault("AUTHENTIK_CLIENT_ID", "test-client-id")
+os.environ.setdefault("AUTHENTIK_CLIENT_SECRET", "test-client-secret")
+os.environ.setdefault("AUTHENTIK_REDIRECT_URI", "http://test/api/v1/auth/callback")
 
 
 def _recreate_test_database() -> None:
@@ -70,7 +77,6 @@ def _test_database():
 # assignment — never move these above the os.environ line.
 from app.core import casbin_enforcer  # noqa: E402
 from app.core.deps import get_current_user  # noqa: E402
-from app.core.security import get_password_hash  # noqa: E402
 from app.db.session import engine as app_engine  # noqa: E402
 from app.db.session import get_db  # noqa: E402
 from app.main import app as fastapi_app  # noqa: E402
@@ -135,15 +141,15 @@ async def client(db_session):
 
 def as_user(user: User) -> None:
     """Makes every subsequent request on the current test's `client` see
-    `user` as the authenticated caller — bypasses the JWT/cookie flow
-    entirely (that flow itself is exercised by a dedicated login test, not
-    every test that just needs *some* authenticated user)."""
+    `user` as the authenticated caller — bypasses the Authentik OIDC round
+    trip entirely (a live IdP isn't available in this test harness; see
+    docs/adr/ADR-012-authentik-sso.md)."""
     fastapi_app.dependency_overrides[get_current_user] = lambda: user
 
 
 async def make_user(db_session, *, role: str | None = None, username: str | None = None) -> User:
     username = username or f"test_{uuid.uuid4().hex[:10]}"
-    user = User(username=username, hashed_password=get_password_hash("Test@12345"), is_active=True)
+    user = User(username=username, email=f"{username}@bilwacorp.example", is_active=True)
     db_session.add(user)
     await db_session.flush()
     if role:

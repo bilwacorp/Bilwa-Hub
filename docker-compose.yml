@@ -44,6 +44,14 @@ services:
       # "disable" for a Dokploy-managed DB on the internal network (no TLS).
       - DB_SSL_MODE=${DB_SSL_MODE:-disable}
       - SECRET_KEY=${SECRET_KEY:?set SECRET_KEY in the Environment tab}
+      # Staff login is Authentik OIDC only — required, no fallback. Create
+      # an OAuth2/OpenID provider + application in Authentik first (redirect
+      # URI = ${HUB_PUBLIC_URL}/api/v1/auth/callback) — see
+      # docs/adr/ADR-012-authentik-sso.md.
+      - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER:?set AUTHENTIK_ISSUER in the Environment tab}
+      - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID:?set AUTHENTIK_CLIENT_ID in the Environment tab}
+      - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET:?set AUTHENTIK_CLIENT_SECRET in the Environment tab}
+      - AUTHENTIK_REDIRECT_URI=${AUTHENTIK_REDIRECT_URI:?set AUTHENTIK_REDIRECT_URI in the Environment tab}
       # Fernet key — generate with:
       #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
       - HUB_ENCRYPTION_KEY=${HUB_ENCRYPTION_KEY:?generate a Fernet key - see README}
@@ -102,6 +110,15 @@ services:
       - DATABASE_URL=${DATABASE_URL:?set DATABASE_URL to the managed Postgres}
       - DB_SSL_MODE=${DB_SSL_MODE:-disable}
       - SECRET_KEY=${SECRET_KEY:?set SECRET_KEY in the Environment tab}
+      # Never actually used by the worker process — it doesn't serve
+      # api/routers/auth.py — but Settings() is required-field validated at
+      # import time (app.core.config), and this image imports it
+      # transitively, so these still must be set or the container won't
+      # boot. Same values as `backend`'s.
+      - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER:?set AUTHENTIK_ISSUER in the Environment tab}
+      - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID:?set AUTHENTIK_CLIENT_ID in the Environment tab}
+      - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET:?set AUTHENTIK_CLIENT_SECRET in the Environment tab}
+      - AUTHENTIK_REDIRECT_URI=${AUTHENTIK_REDIRECT_URI:?set AUTHENTIK_REDIRECT_URI in the Environment tab}
       - HUB_ENCRYPTION_KEY=${HUB_ENCRYPTION_KEY:?generate a Fernet key - see README}
       - DOKPLOY_NETWORK_SUBNET=${DOKPLOY_NETWORK_SUBNET:?set to dokploy-network's CIDR}
       - APP_ENV=production

@@ -86,7 +86,6 @@ NOTIFICATIONS_TEST_SEND = ("notifications", "test_send")
 STAFF_VIEW = ("staff", "view")
 STAFF_CREATE = ("staff", "create")
 STAFF_UPDATE = ("staff", "update")            # edit/deactivate/reactivate/change role
-STAFF_RESET_PASSWORD = ("staff", "reset_password")
 
 # ── rbac ──────────────────────────────────────────────────────────────────
 RBAC_VIEW = ("rbac", "view")
@@ -196,7 +195,6 @@ ALL_PERMISSIONS: list[tuple[str, str, str]] = [
     (*STAFF_VIEW, "View staff accounts"),
     (*STAFF_CREATE, "Create a staff account"),
     (*STAFF_UPDATE, "Edit, deactivate/reactivate, or change the role of a staff account"),
-    (*STAFF_RESET_PASSWORD, "Reset a staff account's password"),
     (*RBAC_VIEW, "View the permission catalog and roles"),
     (*RBAC_MANAGE, "Create/delete custom roles and change which permissions any role holds"),
     (*WORKFLOWS_VIEW, "View workflow definitions and their BPMN diagrams"),

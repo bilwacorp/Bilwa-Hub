@@ -17,8 +17,11 @@ api.interceptors.response.use(
   (error: AxiosError) => {
     const status = error.response?.status
     if (status === 401) {
-      const isLoginRequest = error.config?.url?.includes('/auth/login')
-      if (!isLoginRequest) {
+      // SsoCompletePage's own /auth/me call handles its 401 itself (routes
+      // to /login?error=sso_failed) — this hard-redirect would otherwise
+      // beat it there and lose that message.
+      const isSsoCompleteCheck = error.config?.url?.includes('/auth/me')
+      if (!isSsoCompleteCheck) {
         useAuthStore.getState().clearAuth()
         window.location.href = '/login'
       }

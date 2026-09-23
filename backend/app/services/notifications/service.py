@@ -24,7 +24,6 @@ from app.services.notifications.constants import (
     DEFAULT_WHATSAPP_PROVIDER,
     SENSITIVE_CONTEXT_KEYS,
     TEMPLATE_APPROVAL_REQUESTED,
-    TEMPLATE_PASSWORD_RESET,
     TEMPLATE_SUBSCRIPTION_EXPIRING,
     TEMPLATE_SUBSCRIPTION_REQUEST_RAISED,
     TEMPLATE_SUPPORT_TICKET_RAISED,
@@ -299,16 +298,3 @@ class NotificationService:
             subject=f"Approval needed: {request}",
         )
 
-    async def send_password_reset(
-        self, *, recipient: str, username: str, reset_url: str, expiry_minutes: int,
-    ) -> NotificationLog:
-        """Email only — a staff member's reset link should land wherever
-        they'd check for a login problem in the first place; no WhatsApp
-        counterpart (and unlike the other alerts, this one is never
-        resendable once sent — see SENSITIVE_CONTEXT_KEYS's "reset_url")."""
-        return await self.send_template(
-            recipient=recipient,
-            template=TEMPLATE_PASSWORD_RESET,
-            context={"username": username, "reset_url": reset_url, "expiry_minutes": expiry_minutes},
-            subject="Reset your BilwaCorp Fleet Hub password",
-        )

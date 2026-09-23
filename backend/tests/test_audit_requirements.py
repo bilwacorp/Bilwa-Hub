@@ -13,7 +13,7 @@ from tests.conftest import as_user
 async def test_creating_a_staff_user_is_audited(client, db_session, admin_user):
     as_user(admin_user)
     resp = await client.post("/users", json={
-        "username": "new-staffer", "password": "Test@12345", "role": "engineer",
+        "username": "new-staffer", "email": "new-staffer@bilwacorp.example", "role": "engineer",
     })
     assert resp.status_code == 201
 
@@ -27,7 +27,7 @@ async def test_creating_a_staff_user_is_audited(client, db_session, admin_user):
 
 async def test_role_change_and_deactivation_are_audited_with_before_after(client, db_session, admin_user):
     as_user(admin_user)
-    created = await client.post("/users", json={"username": "flip-flop", "password": "Test@12345", "role": "engineer"})
+    created = await client.post("/users", json={"username": "flip-flop", "email": "flip-flop@bilwacorp.example", "role": "engineer"})
     user_id = created.json()["id"]
 
     role_change = await client.patch(f"/users/{user_id}", json={"role": "admin"})
@@ -43,21 +43,6 @@ async def test_role_change_and_deactivation_are_audited_with_before_after(client
         select(OperationalEvent).where(OperationalEvent.event_type == et.STAFF_DEACTIVATED)
     )).scalar_one()
     assert deactivated_event.event_metadata["changes"]["is_active"] == {"from": True, "to": False}
-
-
-async def test_password_reset_is_audited_without_leaking_the_password(client, db_session, admin_user):
-    as_user(admin_user)
-    created = await client.post("/users", json={"username": "reset-me", "password": "Test@12345", "role": "engineer"})
-    user_id = created.json()["id"]
-
-    resp = await client.post(f"/users/{user_id}/reset-password", json={"new_password": "NewPass@2027"})
-    assert resp.status_code == 204
-
-    event = (await db_session.execute(
-        select(OperationalEvent).where(OperationalEvent.event_type == et.STAFF_PASSWORD_RESET)
-    )).scalar_one()
-    assert "NewPass@2027" not in str(event.event_metadata)
-    assert "password" not in event.event_metadata
 
 
 async def test_role_lifecycle_is_audited(client, db_session, admin_user):
@@ -94,7 +79,7 @@ async def test_role_lifecycle_is_audited(client, db_session, admin_user):
 async def test_actor_ip_is_captured_from_x_real_ip_header(client, db_session, admin_user):
     as_user(admin_user)
     resp = await client.post(
-        "/users", json={"username": "ip-check", "password": "Test@12345", "role": "engineer"},
+        "/users", json={"username": "ip-check", "email": "ip-check@bilwacorp.example", "role": "engineer"},
         headers={"X-Real-IP": "203.0.113.7"},
     )
     assert resp.status_code == 201

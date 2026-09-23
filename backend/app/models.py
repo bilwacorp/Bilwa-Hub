@@ -15,9 +15,11 @@ from app.db.session import Base
 
 
 class User(Base):
-    """BilwaCorp staff login. Phase 1 has exactly one seeded row (see
-    alembic/versions/002_seed_admin.py) — no self-signup, no user-management
-    UI yet."""
+    """BilwaCorp staff login. Authentication is Authentik OIDC SSO only
+    (api/routers/auth.py, services/oidc_client.py, see docs/adr/ADR-012-
+    authentik-sso.md) — no self-signup, matched against Authentik's
+    id_token `email` claim. An admin must pre-create this row before that
+    person can sign in; there is no auto-provisioning."""
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -29,16 +31,18 @@ class User(Base):
     # never gets a WhatsApp send (email-only), same "never block the
     # caller" posture as a missing email.
     phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    hashed_password: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Legacy — unused since login moved to Authentik SSO (migration
+    # 024_authentik_sso.py made this nullable rather than dropping it, for
+    # rollback safety). Nothing reads or writes this anymore.
+    hashed_password: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    # Bumped on password change to invalidate every JWT issued before that
-    # point — see core/deps.py's get_current_user, ported from
-    # PoultryOS-CBP's same convention.
+    # Bumped to invalidate every JWT issued before that point — see
+    # core/deps.py's get_current_user, ported from PoultryOS-CBP's same
+    # convention. Still relevant post-SSO: deactivating a user bumps this.
     token_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    # Self-service "forgot password" (api/routers/auth.py) — hash-only
-    # storage, same pattern as Deployment.registration_token_hash: this hub
-    # only ever needs to *verify* the token a user presents back, never
-    # present it again itself. NULL/expired = no reset in progress.
+    # Legacy — self-service password reset, unused since login moved to
+    # Authentik SSO. Left in place (already nullable) rather than dropped;
+    # nothing reads or writes these anymore.
     password_reset_token_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     password_reset_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

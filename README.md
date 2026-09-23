@@ -14,25 +14,28 @@ model, why registration can't be a literal Alembic migration, edge cases).
 
 ## Seeded login
 
-Migration `002_seed_admin.py` creates one staff account:
-
-- Username: `admin`
-- Password: `ChangeMe@2026`
-
-Change it before any real deployment — there's no self-service
-password-change endpoint in Phase 1; update the `users.hashed_password`
-column directly (bcrypt) or re-run the seed with a different `PASSWORD`
-constant against a fresh DB.
+Staff sign in via Authentik SSO — see `docs/adr/ADR-012-authentik-sso.md`.
+Migration `002_seed_admin.py` creates one staff account (`admin`) but sets
+no `email` on it. **Before logging in for the first time on a real
+deployment, set that row's `email`** to a real Authentik identity's email
+(direct DB access — there's no UI for editing your own row before you can
+sign in at all), then set the four `AUTHENTIK_*` env vars below.
 
 ## Backend
 
 ```
 cd backend
-cp .env.example .env   # fill in DATABASE_URL, SECRET_KEY, HUB_ENCRYPTION_KEY
+cp .env.example .env   # fill in DATABASE_URL, SECRET_KEY, HUB_ENCRYPTION_KEY, AUTHENTIK_*
 pip install -r requirements.txt
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
+
+`AUTHENTIK_ISSUER`/`AUTHENTIK_CLIENT_ID`/`AUTHENTIK_CLIENT_SECRET`/
+`AUTHENTIK_REDIRECT_URI` are required — no fallback — staff login is
+Authentik OIDC only. Create an OAuth2/OpenID provider + application in
+Authentik first (redirect URI = `<this hub's base URL>/api/v1/auth/callback`),
+then fill these in from it. See `docs/adr/ADR-012-authentik-sso.md`.
 
 `HUB_ENCRYPTION_KEY` is required (not optional) — it's the Fernet key that
 lets the hub decrypt a deployment's `action_key` when calling back in to
@@ -68,6 +71,7 @@ package's README.md. The database is **not** in the stack.
    - `DATABASE_URL` — the Postgres from step 1, asyncpg form:
      `postgresql+asyncpg://user:pass@<db-service-name>:5432/dbname`
    - `SECRET_KEY` — random, 32+ chars
+   - `AUTHENTIK_ISSUER` / `AUTHENTIK_CLIENT_ID` / `AUTHENTIK_CLIENT_SECRET` / `AUTHENTIK_REDIRECT_URI` — from an OAuth2/OpenID provider + application you create in Authentik (see "Seeded login" above)
    - `HUB_ENCRYPTION_KEY` — `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
    - `DOKPLOY_NETWORK_SUBNET` — dokploy-network's CIDR (same value the
      PoultryOS-CBP deployments on this host already use)
@@ -83,9 +87,9 @@ package's README.md. The database is **not** in the stack.
    port **`80`**. Leave `backend`, `celery-worker`, and `redis` with no
    domain.
 5. Deploy. `backend` runs `alembic upgrade head` on every start, so the
-   schema + seeded admin are created automatically.
-6. Log in with `admin` / `ChangeMe@2026` and **change the password
-   immediately** (see below).
+   schema + seeded admin row are created automatically.
+6. Set the seeded `admin` row's `email` to a real Authentik identity (see
+   "Seeded login" above), then sign in via "Sign in with Authentik."
 
 ## Connecting a new client deployment
 

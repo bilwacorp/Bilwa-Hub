@@ -1,26 +1,14 @@
-"""Password hashing + JWT issuing/decoding — ported near-verbatim from
-PoultryOS-CBP's core/security.py (same primitives: bcrypt, python-jose)."""
+"""JWT issuing/decoding for this hub's own session cookie — ported
+near-verbatim from PoultryOS-CBP's core/security.py. Password hashing
+(bcrypt) was removed when staff login moved to Authentik SSO (see
+api/routers/auth.py, services/oidc_client.py) — this module now only
+signs/verifies the session token minted after a successful SSO round-trip."""
 from datetime import datetime, timedelta
 from typing import Optional
-import bcrypt
 from jose import JWTError, jwt
 from app.core.config import settings
 
 ACCESS_TOKEN_COOKIE_NAME = "access_token"
-
-# Fixed bcrypt hash of an arbitrary, unused password — compared against on a
-# login lookup miss so an unknown-username response takes the same time as a
-# wrong-password one (bcrypt dominates latency here). See
-# verify_password_constant_time.
-_DUMMY_PASSWORD_HASH = "$2b$12$heNaGBBYDVFfNtMQ2JZ5cuFY/HZwCVhTooKrkiEFF/r3TbPxK6iOi"
-
-
-def verify_password_constant_time(plain_password: str, hashed_password: Optional[str]) -> bool:
-    return bcrypt.checkpw(plain_password.encode(), (hashed_password or _DUMMY_PASSWORD_HASH).encode())
-
-
-def get_password_hash(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:

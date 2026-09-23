@@ -12,13 +12,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import event_types as et
-from app.core.permissions import STAFF_CREATE, STAFF_RESET_PASSWORD, STAFF_UPDATE, STAFF_VIEW, require_permission
-from app.core.security import get_password_hash
+from app.core.permissions import STAFF_CREATE, STAFF_UPDATE, STAFF_VIEW, require_permission
 from app.db.session import get_db
 from app.models import User
-from app.schemas import (
-    PasswordResetRequest, StaffUserCreate, StaffUserListResponse, StaffUserOut, StaffUserUpdate,
-)
+from app.schemas import StaffUserCreate, StaffUserListResponse, StaffUserOut, StaffUserUpdate
 from app.services import rbac
 from app.services.events import record_event
 
@@ -54,10 +51,7 @@ async def list_users(db: AsyncSession = Depends(get_db), current_user: User = De
 async def create_user(body: StaffUserCreate, db: AsyncSession = Depends(get_db), current_user: User = Depends(require_permission(*STAFF_CREATE))):
     if not await rbac.get_role_by_name(db, body.role):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown role: {body.role!r}")
-    user = User(
-        username=body.username, full_name=body.full_name, email=body.email, phone=body.phone,
-        hashed_password=get_password_hash(body.password),
-    )
+    user = User(username=body.username, full_name=body.full_name, email=body.email, phone=body.phone)
     db.add(user)
     try:
         await db.flush()
@@ -142,20 +136,3 @@ async def update_user(
         )
 
     return await _out(user)
-
-
-@router.post("/{user_id}/reset-password", status_code=204)
-async def reset_password(
-    user_id: uuid.UUID, body: PasswordResetRequest, db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission(*STAFF_RESET_PASSWORD)),
-):
-    user = await _get_user_or_404(db, user_id)
-    user.hashed_password = get_password_hash(body.new_password)
-    user.token_version += 1
-    # Never the password itself in metadata — just that a reset happened.
-    record_event(
-        db, event_type=et.STAFF_PASSWORD_RESET, source=et.SOURCE_HUB, actor_type=et.ACTOR_STAFF,
-        actor_id=current_user.id, entity_type=et.ENTITY_USER, entity_id=user.id,
-        metadata={"username": user.username},
-    )
-    await db.flush()

@@ -50,8 +50,17 @@ class Settings(BaseSettings):
     # windows do — hourly is plenty and keeps the poll loop cheap.
     EXPIRY_REMINDER_SCHEDULER_INTERVAL_SECONDS: int = 3600
 
-    # Self-service "forgot password" link lifetime (api/routers/auth.py).
-    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
+    # ── Authentik SSO (services/oidc_client.py, api/routers/auth.py) ───────
+    # Staff login is OIDC-only — there is no password fallback, so unlike
+    # GITHUB_APP_ID below these are required with no default: an unset value
+    # should fail hub startup loudly, not let staff silently lock themselves
+    # out later.
+    AUTHENTIK_ISSUER: str
+    AUTHENTIK_CLIENT_ID: str
+    AUTHENTIK_CLIENT_SECRET: str
+    # This hub's own callback URL, registered as a redirect URI on the
+    # Authentik side — e.g. https://hub.bilwacorp.example/api/v1/auth/callback
+    AUTHENTIK_REDIRECT_URI: str
 
     # ── notifications (services/notifications/) ────────────────────────────
     # Celery broker/backend — a dedicated Redis DB index (1), separate from

@@ -6,8 +6,7 @@ import api from './lib/api'
 import { cn } from './lib/utils'
 import { Badge } from './components/ui/Badge'
 import LoginPage from './pages/auth/LoginPage'
-import ForgotPasswordPage from './pages/auth/ForgotPasswordPage'
-import ResetPasswordPage from './pages/auth/ResetPasswordPage'
+import SsoCompletePage from './pages/auth/SsoCompletePage'
 import DeploymentsListPage from './pages/deployments/DeploymentsListPage'
 import DeploymentDetailPage from './pages/deployments/DeploymentDetailPage'
 import SupportTicketsPage from './pages/tickets/SupportTicketsPage'
@@ -103,9 +102,17 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const role = user?.role
 
   const handleLogout = async () => {
-    await api.post('/auth/logout')
+    const { data } = await api.post('/auth/logout')
     clearAuth()
-    navigate('/login')
+    // Full redirect through Authentik's end-session endpoint when one's
+    // available, so the SSO session actually ends too — otherwise a staff
+    // member could click "Sign in with Authentik" right back in without a
+    // credential prompt (see docs/adr/ADR-012-authentik-sso.md).
+    if (data?.sso_logout_url) {
+      window.location.href = data.sso_logout_url
+    } else {
+      navigate('/login')
+    }
   }
 
   const initial = user?.full_name?.[0] || user?.username?.[0] || '?'
@@ -229,8 +236,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-      <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/sso/complete" element={<SsoCompletePage />} />
       <Route path="/deployments" element={<RequireAuth><RequirePermission permission="deployments.view"><Shell><DeploymentsListPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/deployments/:deploymentId" element={<RequireAuth><RequirePermission permission="deployments.view"><Shell><DeploymentDetailPage /></Shell></RequirePermission></RequireAuth>} />
       <Route path="/customers" element={<RequireAuth><RequirePermission permission="customers.view"><Shell><CustomersPage /></Shell></RequirePermission></RequireAuth>} />

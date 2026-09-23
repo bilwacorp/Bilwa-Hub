@@ -26,7 +26,7 @@ class _BearerOrCookie(OAuth2PasswordBearer):
         return request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)
 
 
-oauth2_scheme = _BearerOrCookie(tokenUrl="/api/v1/auth/login", auto_error=False)
+oauth2_scheme = _BearerOrCookie(tokenUrl="/api/v1/auth/callback", auto_error=False)
 
 
 async def get_current_user(

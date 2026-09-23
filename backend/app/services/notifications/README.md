@@ -67,18 +67,7 @@ silent. One email per recipient with an email on file, one WhatsApp
 message per recipient with a
 phone on file (`User.phone`, set from the Staff page).
 
-One more trigger lives outside `notification_triggers.py`, called directly
-from `api/routers/auth.py`'s `forgot_password` endpoint instead: a self-
-service password-reset email (`TEMPLATE_PASSWORD_RESET`,
-`NotificationService.send_password_reset`), targeted at exactly the one
-staff member who requested it — not a fan-out, so it doesn't go through
-`recipients_for_deployment()`. Email only, no WhatsApp counterpart, and
-never resendable — its `reset_url` context key is in
-`constants.SENSITIVE_CONTEXT_KEYS` (the live one-time reset token is
-embedded in that URL), so `NotificationLog.payload` only ever shows `"***"`
-for it.
-
-Adding a third trigger (a new template) is: a new `TEMPLATE_*` constant in
+Adding a new trigger (a new template) is: a new `TEMPLATE_*` constant in
 `constants.py`, a `templates/<key>.html` + `templates_whatsapp/<key>.txt`
 pair, a `send_*_alert`/`send_*_whatsapp` convenience method on
 `NotificationService`, and a call site in `notification_triggers.py` (or
